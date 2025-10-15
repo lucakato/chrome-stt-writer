@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMicrophonePermission } from '@shared/hooks/useMicrophonePermission';
 import { useSpeechRecorder } from '@shared/hooks/useSpeechRecorder';
 import type { EkkoMessage } from '@shared/messages';
+import { readOnboardingState, updateOnboardingState } from '@shared/storage/onboarding';
 
 type RewritePreset =
   | 'concise-formal'
@@ -64,6 +65,7 @@ export default function App() {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [streamingSummary, setStreamingSummary] = useState<string | null>(null);
   const [language, setLanguage] = useState<string>(() => navigator.language ?? 'en-US');
+  const [onboardingDismissed, setOnboardingDismissed] = useState(false);
 
   const pendingSyncRef = useRef<number | null>(null);
   const lastSyncedRef = useRef<string>('');
@@ -209,6 +211,28 @@ export default function App() {
     []
   );
 
+  const openMicrophoneSettings = useCallback(() => {
+    chrome.tabs
+      .create({ url: 'chrome://settings/content/microphone' })
+      .catch((error: unknown) => {
+        console.warn('Unable to open microphone settings', error);
+      });
+  }, []);
+
+  useEffect(() => {
+    void (async () => {
+      const onboarding = await readOnboardingState();
+      setOnboardingDismissed(onboarding.microphoneAccepted);
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (micStatus === 'granted') {
+      setOnboardingDismissed(true);
+      void updateOnboardingState({ microphoneAccepted: true });
+    }
+  }, [micStatus]);
+
   useEffect(() => {
     if (pendingSyncRef.current) {
       window.clearTimeout(pendingSyncRef.current);
@@ -257,38 +281,80 @@ export default function App() {
 
       <section className="panel-section" aria-labelledby="capture-section-title">
         <div className="record-controls">
-          <button
-            type="button"
-            className="record-button"
-            onClick={handleToggleRecording}
-            disabled={micStatus === 'pending' || (!sttSupported && !isRecording)}
-          >
-            {isRecording ? 'Stop recording' : 'Start recording'}
+          <div className="record-controls__main">
+            <button
+              type="button"
+              className="record-button"
+              onClick={handleToggleRecording}
+              disabled={micStatus === 'pending' || (!sttSupported && !isRecording)}
+            >
+              {isRecording ? 'Stop recording' : 'Start recording'}
+              <span
+                className={`status-chip ${isRecording ? 'status-chip--active' : ''}`}
+                aria-live="polite"
+              >
+                {isRecording ? 'Listening…' : 'Idle'}
+              </span>
+            </button>
             <span
-              className={`status-chip ${isRecording ? 'status-chip--active' : ''}`}
+              className={`status-chip ${permissionMeta.active ? 'status-chip--active' : ''}`}
               aria-live="polite"
             >
-              {isRecording ? 'Listening…' : 'Idle'}
+              {permissionMeta.text}
             </span>
-          </button>
-          <span
-            className={`status-chip ${permissionMeta.active ? 'status-chip--active' : ''}`}
-            aria-live="polite"
-          >
-            {permissionMeta.text}
-          </span>
+          </div>
           {micStatus !== 'granted' && (
-            <button type="button" className="button" onClick={requestPermission}>
-              Grant microphone access
+            <button
+              type="button"
+              className="button button--outline record-controls__cta"
+              onClick={() => {
+                resetSttError();
+                void requestPermission();
+              }}
+            >
+              Allow microphone access
             </button>
           )}
         </div>
-        {micError && <p className="danger">{micError}</p>}
-        {sttError && <p className="danger">{sttError}</p>}
-        {!sttSupported && (
-          <p className="danger">
-            Live speech-to-text is not available in this browser. Try Chrome on desktop (138+).
-          </p>
+        <div className="record-controls__messages" aria-live="polite">
+          {micError && <p className="helper-text danger">{micError}</p>}
+          {!micError && micStatus === 'denied' && (
+            <p className="helper-text danger">
+              Microphone access is blocked. Click the lock icon next to the address bar, set Microphone to
+              "Allow", then try again.
+            </p>
+          )}
+          {!micError && micStatus === 'prompt' && (
+            <p className="helper-text">When Chrome prompts for access, choose Allow to start recording.</p>
+          )}
+          {micStatus === 'denied' && (
+            <button type="button" className="text-button" onClick={openMicrophoneSettings}>
+              Open Chrome microphone settings
+            </button>
+          )}
+          {sttError && <p className="helper-text danger">{sttError}</p>}
+          {!sttSupported && (
+            <p className="helper-text danger">
+              Live speech-to-text is not available in this browser. Try Chrome on desktop (138+) for Gemini Nano.
+            </p>
+          )}
+        </div>
+        {!onboardingDismissed && micStatus !== 'granted' && (
+          <div className="onboarding-card" role="note">
+            <h3 className="onboarding-card__title">First-time setup</h3>
+            <ol className="onboarding-card__list">
+              <li>Click the lock icon next to the address bar.</li>
+              <li>Set <strong>Microphone</strong> to <strong>Allow</strong>.</li>
+              <li>Return here and start recording.</li>
+            </ol>
+            <button
+              type="button"
+              className="button button--outline"
+              onClick={openMicrophoneSettings}
+            >
+              Open settings in a new tab
+            </button>
+          </div>
         )}
       </section>
 

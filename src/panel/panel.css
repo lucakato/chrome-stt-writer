@@ -99,7 +99,27 @@ body {
 .record-controls {
   display: flex;
   gap: 12px;
+  flex-wrap: wrap;
   align-items: center;
+}
+
+.record-controls__main {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1 1 auto;
+  min-width: 260px;
+}
+
+.record-controls__cta {
+  flex-shrink: 0;
+}
+
+.record-controls__messages {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
 }
 
 .record-button {
@@ -183,6 +203,16 @@ body {
   color: white;
 }
 
+.button--outline {
+  background: transparent;
+  border: 1px solid var(--ekko-primary);
+  color: var(--ekko-primary);
+}
+
+.button--outline:hover {
+  background: rgba(89, 104, 242, 0.1);
+}
+
 .button:hover {
   background: var(--ekko-accent);
   color: var(--text-primary);
@@ -256,6 +286,56 @@ body {
   font-size: 0.9rem;
 }
 
+.helper-text {
+  margin: 4px 0 0;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.helper-text.danger {
+  color: var(--error);
+}
+
+.text-button {
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: var(--ekko-primary);
+  font-weight: 600;
+  cursor: pointer;
+  align-self: flex-start;
+}
+
+.text-button:hover {
+  text-decoration: underline;
+}
+
+.onboarding-card {
+  margin-top: 12px;
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px dashed rgba(89, 104, 242, 0.4);
+  background: rgba(174, 182, 255, 0.1);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.onboarding-card__title {
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--ekko-primary);
+}
+
+.onboarding-card__list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  display: grid;
+  gap: 4px;
+}
+
 .danger {
   color: var(--error);
 }
@@ -276,5 +356,19 @@ body {
 
   .button:hover {
     color: white;
+  }
+
+  .button--outline {
+    border-color: var(--ekko-accent);
+    color: var(--ekko-accent);
+  }
+
+  .button--outline:hover {
+    background: rgba(174, 182, 255, 0.1);
+  }
+
+  .onboarding-card {
+    border-color: rgba(174, 182, 255, 0.6);
+    background: rgba(89, 104, 242, 0.14);
   }
 }
