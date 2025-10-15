@@ -59,6 +59,16 @@ export async function upsertTranscript(transcript: string, metadata: Partial<Tra
   const now = Date.now();
   const existing = sessions.find((entry) => entry.id === currentId);
 
+  let combinedActions = [...(existing?.actions ?? []), ...(metadata.actions ?? [])];
+
+  if (combinedActions.length === 0) {
+    combinedActions = ['Captured'];
+  } else if (!combinedActions.includes('Captured')) {
+    combinedActions = ['Captured', ...combinedActions];
+  }
+
+  const dedupedActions = combinedActions.filter((action, index) => combinedActions.indexOf(action) === index);
+
   const updated: TranscriptSession = {
     id: currentId,
     createdAt: existing?.createdAt ?? now,
@@ -66,7 +76,7 @@ export async function upsertTranscript(transcript: string, metadata: Partial<Tra
     transcript,
     summary: metadata.summary ?? existing?.summary,
     rewrites: metadata.rewrites ?? existing?.rewrites,
-    actions: metadata.actions ?? existing?.actions ?? ['Captured'],
+    actions: dedupedActions,
     tag: metadata.tag ?? existing?.tag,
     sourceUrl: metadata.sourceUrl ?? existing?.sourceUrl
   };

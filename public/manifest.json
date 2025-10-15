@@ -10,7 +10,8 @@
     "storage",
     "activeTab",
     "scripting",
-    "sidePanel"
+    "sidePanel",
+    "aiLanguage"
   ],
   "commands": {
     "_execute_action": {

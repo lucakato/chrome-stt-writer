@@ -1,8 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMicrophonePermission } from '@shared/hooks/useMicrophonePermission';
 import { useSpeechRecorder } from '@shared/hooks/useSpeechRecorder';
-import type { EkkoMessage } from '@shared/messages';
+import type { EkkoMessage, EkkoResponse } from '@shared/messages';
 import { readOnboardingState, updateOnboardingState } from '@shared/storage/onboarding';
+import {
+  getSummarizerAvailability,
+  summarizeText,
+  type SummarizerAvailabilityStatus
+} from '@shared/ai/summarizer';
 
 type RewritePreset =
   | 'concise-formal'
@@ -17,6 +22,7 @@ type HistoryEntry = {
   title: string;
   createdAt: string;
   actions: string[];
+  summary?: string;
 };
 
 const rewritePresets: Array<{ id: RewritePreset; label: string }> = [
@@ -66,9 +72,14 @@ export default function App() {
   const [streamingSummary, setStreamingSummary] = useState<string | null>(null);
   const [language, setLanguage] = useState<string>(() => navigator.language ?? 'en-US');
   const [onboardingDismissed, setOnboardingDismissed] = useState(false);
+  const [summarizerState, setSummarizerState] = useState<'idle' | 'checking' | SummarizerAvailabilityStatus | 'summarizing'>('idle');
+  const [summarizerError, setSummarizerError] = useState<string | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
+  const [summarizerMessage, setSummarizerMessage] = useState<string | null>(null);
 
   const pendingSyncRef = useRef<number | null>(null);
   const lastSyncedRef = useRef<string>('');
+  const activeSessionIdRef = useRef<string | null>(null);
 
   const permissionMeta = useMemo(() => formatPermission(micStatus), [micStatus]);
   const isMicGranted = micStatus === 'granted';
@@ -88,6 +99,12 @@ export default function App() {
     }
     return language;
   }, [language]);
+
+  const outputLanguage = useMemo(() => {
+    const allowed = ['en', 'es', 'ja'];
+    const locale = (navigator.language || 'en').slice(0, 2).toLowerCase();
+    return allowed.includes(locale) ? locale : 'en';
+  }, []);
 
   const appendFinalSegment = useCallback((segment: string) => {
     setTranscript((prev) => {
@@ -151,24 +168,101 @@ export default function App() {
 
   const activeTranscript = useMemo(() => displayTranscript.trim(), [displayTranscript]);
 
-  const handleSummarize = useCallback(() => {
+  const isSummarizing = summarizerState === 'summarizing';
+  const isSummarizerBusy =
+    summarizerState === 'checking' || summarizerState === 'downloadable' || summarizerState === 'summarizing';
+  const summarizerUnavailable = summarizerState === 'unsupported' || summarizerState === 'unavailable';
+
+  const handleSummarize = useCallback(async () => {
     if (!activeTranscript) {
       return;
     }
 
     setTranscript(activeTranscript);
-    // Placeholder for Summarizer API integration.
-    setStreamingSummary('Summaries will appear here once the Summarizer API is wired in.');
-    setHistory((entries) => [
-      {
-        id: crypto.randomUUID(),
-        title: activeTranscript.slice(0, 60) || 'Untitled transcript',
-        createdAt: new Date().toLocaleTimeString(),
-        actions: ['Summarized']
-      },
-      ...entries
-    ]);
-  }, [activeTranscript]);
+    setSummarizerError(null);
+    setSummarizerState('summarizing');
+    setSummarizerMessage('Generating summary…');
+    setDownloadProgress(null);
+    setStreamingSummary('');
+
+    try {
+      const result = await summarizeText({
+        text: activeTranscript,
+        context: 'Voice transcript captured via Ekko side panel.',
+        outputLanguage,
+        onStatusChange: (status) => {
+          if (status === 'downloadable') {
+            setSummarizerState('downloadable');
+            setSummarizerError(null);
+            setSummarizerMessage('Downloading on-device model…');
+          }
+          if (status === 'ready') {
+            setSummarizerState('summarizing');
+            setSummarizerError(null);
+            setSummarizerMessage('Model ready. Summarizing…');
+          }
+        },
+        onDownloadProgress: (progress) => {
+          setSummarizerState('downloadable');
+          setSummarizerError(null);
+          setSummarizerMessage(`Downloading on-device model… ${Math.round(progress * 100)}%`);
+          setDownloadProgress(progress);
+        },
+        onChunk: (chunk) => {
+          setStreamingSummary(chunk);
+        }
+      });
+
+      setSummarizerState('ready');
+      setSummarizerMessage(null);
+      setSummarizerError(null);
+      setDownloadProgress(null);
+      setStreamingSummary((current) => current ?? result.summary);
+
+      const entryId = activeSessionIdRef.current ?? crypto.randomUUID();
+      setHistory((entries) => [
+        {
+          id: entryId,
+          title: activeTranscript.slice(0, 60) || 'Untitled transcript',
+          createdAt: new Date().toLocaleTimeString(),
+          actions: ['Summarized'],
+          summary: result.summary
+        },
+        ...entries
+      ]);
+
+      chrome.runtime
+        ?.sendMessage({
+          type: 'ekko/ai/summarize',
+          payload: {
+            sessionId: activeSessionIdRef.current ?? undefined,
+            transcript: activeTranscript,
+            summary: result.summary
+          }
+        } satisfies EkkoMessage)
+        .then((response: EkkoResponse | undefined) => {
+          if (response?.ok && response.data && typeof response.data === 'object') {
+            const { id } = response.data as { id?: string };
+            if (typeof id === 'string') {
+              activeSessionIdRef.current = id;
+            }
+          }
+        })
+        .catch((error: unknown) => {
+          console.warn('Unable to persist summary to background', error);
+        });
+    } catch (error) {
+      const rawMessage = error instanceof Error ? error.message : 'Summarization failed.';
+      let message = rawMessage;
+      if (/enough space/i.test(rawMessage)) {
+        message = 'Chrome needs about 22 GB of free space on the profile drive to download the Gemini Nano model. Clear space and try again.';
+      }
+      setSummarizerState('error');
+      setSummarizerError(message);
+      setSummarizerMessage(null);
+      setDownloadProgress(null);
+    }
+  }, [activeTranscript, outputLanguage]);
 
   const handleRewrite = useCallback(() => {
     if (!activeTranscript) {
@@ -234,6 +328,57 @@ export default function App() {
   }, [micStatus]);
 
   useEffect(() => {
+    let cancelled = false;
+
+    void (async () => {
+      setSummarizerState('checking');
+      const availability = await getSummarizerAvailability();
+      if (cancelled) {
+        return;
+      }
+
+      if (availability.status === 'error') {
+        const message = availability.message ?? 'Summarizer API error.';
+        setSummarizerState('error');
+        setSummarizerError(message);
+        setSummarizerMessage(null);
+        return;
+      }
+
+      if (availability.status === 'unsupported') {
+        const message = availability.message ?? 'Summarizer API is not supported on this device.';
+        setSummarizerState('unsupported');
+        setSummarizerError(message);
+        setSummarizerMessage(null);
+        return;
+      }
+
+      if (availability.status === 'unavailable') {
+        const message = availability.message ?? 'Summarizer is currently unavailable.';
+        setSummarizerState('unavailable');
+        setSummarizerError(message);
+        setSummarizerMessage(null);
+        return;
+      }
+
+      if (availability.status === 'downloadable') {
+        setSummarizerState('downloadable');
+        setSummarizerError(null);
+        setSummarizerMessage('First summary may take a moment while the on-device model downloads.');
+        return;
+      }
+
+      setSummarizerState('ready');
+      setSummarizerError(null);
+      setSummarizerMessage(null);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     if (pendingSyncRef.current) {
       window.clearTimeout(pendingSyncRef.current);
     }
@@ -245,6 +390,10 @@ export default function App() {
         return;
       }
 
+      if (!payloadTranscript.trim()) {
+        activeSessionIdRef.current = null;
+      }
+
       chrome.runtime
         ?.sendMessage({
           type: 'ekko/transcript/update',
@@ -253,7 +402,13 @@ export default function App() {
             origin: 'panel'
           }
         } satisfies EkkoMessage)
-        .then(() => {
+        .then((response: EkkoResponse | undefined) => {
+          if (response?.ok && response.data && typeof response.data === 'object') {
+            const { id } = response.data as { id?: string };
+            if (typeof id === 'string') {
+              activeSessionIdRef.current = id;
+            }
+          }
           lastSyncedRef.current = payloadTranscript;
         })
         .catch((error: unknown) => {
@@ -375,10 +530,10 @@ export default function App() {
           <button
             type="button"
             className="button button--primary"
-            disabled={!activeTranscript}
+            disabled={!activeTranscript || isSummarizerBusy || summarizerUnavailable}
             onClick={handleSummarize}
           >
-            Summarize
+            {isSummarizerBusy ? 'Summarizing…' : 'Summarize'}
           </button>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             <select
@@ -400,10 +555,14 @@ export default function App() {
             Copy
           </button>
         </div>
+        <div className="summary-status" aria-live="polite">
+          {summarizerMessage && <p className="helper-text">{summarizerMessage}</p>}
+          {summarizerError && <p className="helper-text danger">{summarizerError}</p>}
+        </div>
         {streamingSummary && (
-          <div className="panel-section" style={{ gap: '8px', background: 'var(--surface-variant)' }}>
-            <strong>Summary Preview</strong>
-            <p>{streamingSummary}</p>
+          <div className="summary-preview">
+            <strong className="summary-preview__title">Summary Preview</strong>
+            <p className="summary-preview__body">{streamingSummary}</p>
           </div>
         )}
       </section>
@@ -459,6 +618,7 @@ export default function App() {
                   <p className="history-item__subtitle">
                     {entry.createdAt} • {entry.actions.join(', ')}
                   </p>
+                  {entry.summary && <p className="history-item__summary">{entry.summary}</p>}
                 </div>
                 <button type="button" className="button">
                   Open

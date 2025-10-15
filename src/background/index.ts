@@ -56,7 +56,7 @@ async function toggleDirectInsert(enabled: boolean) {
   });
 }
 
-async function handleTranscriptUpdate(message: EkkoMessage) {
+async function handleTranscriptUpdate(message: Extract<EkkoMessage, { type: 'ekko/transcript/update' }>) {
   if (message.type !== 'ekko/transcript/update') {
     return;
   }
@@ -67,12 +67,12 @@ async function handleTranscriptUpdate(message: EkkoMessage) {
   });
 
   if (!directInsertEnabled) {
-    return;
+    return session;
   }
 
   const tabId = await getActiveTabId();
   if (tabId === undefined) {
-    return;
+    return session;
   }
 
   await chrome.tabs.sendMessage(tabId, {
@@ -82,6 +82,18 @@ async function handleTranscriptUpdate(message: EkkoMessage) {
       origin: 'panel'
     }
   } satisfies EkkoMessage);
+
+  return session;
+}
+
+async function handleSummarizeUpdate(message: Extract<EkkoMessage, { type: 'ekko/ai/summarize' }>) {
+  const session = await upsertTranscript(message.payload.transcript, {
+    id: message.payload.sessionId,
+    summary: message.payload.summary,
+    actions: ['Summarized']
+  });
+
+  return session;
 }
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -134,10 +146,16 @@ chrome.runtime.onMessage.addListener((message: EkkoMessage, _sender, sendRespons
           await toggleDirectInsert(message.payload.enabled);
           sendResponse({ ok: true } satisfies EkkoResponse);
           break;
-        case 'ekko/transcript/update':
-          await handleTranscriptUpdate(message);
-          sendResponse({ ok: true } satisfies EkkoResponse);
+        case 'ekko/transcript/update': {
+          const session = await handleTranscriptUpdate(message);
+          sendResponse({ ok: true, data: session } satisfies EkkoResponse);
           break;
+        }
+        case 'ekko/ai/summarize': {
+          const session = await handleSummarizeUpdate(message);
+          sendResponse({ ok: true, data: session } satisfies EkkoResponse);
+          break;
+        }
         default:
           sendResponse({
             ok: false,

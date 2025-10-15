@@ -280,6 +280,17 @@ body {
   color: var(--text-secondary);
 }
 
+.history-item__summary {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .empty-state {
   text-align: center;
   color: var(--text-secondary);
@@ -308,6 +319,40 @@ body {
 
 .text-button:hover {
   text-decoration: underline;
+}
+
+.summary-status {
+  min-height: 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.summary-preview {
+  margin-top: 8px;
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-variant);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.summary-preview__title {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.summary-preview__body {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  line-height: 1.5;
+  white-space: pre-wrap;
 }
 
 .onboarding-card {
@@ -370,5 +415,10 @@ body {
   .onboarding-card {
     border-color: rgba(174, 182, 255, 0.6);
     background: rgba(89, 104, 242, 0.14);
+  }
+
+  .summary-preview {
+    border-color: rgba(174, 182, 255, 0.35);
+    background: rgba(89, 104, 242, 0.18);
   }
 }

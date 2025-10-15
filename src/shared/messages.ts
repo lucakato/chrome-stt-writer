@@ -15,14 +15,18 @@ export type EkkoMessage =
   | {
       type: 'ekko/ai/summarize';
       payload: {
-        transcriptId: string;
+        sessionId?: string;
+        transcript: string;
+        summary: string;
       };
     }
   | {
       type: 'ekko/ai/rewrite';
       payload: {
-        transcriptId: string;
+        sessionId?: string;
         preset: string;
+        transcript: string;
+        rewrite: string;
       };
     };
 
