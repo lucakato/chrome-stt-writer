@@ -87,11 +87,25 @@ async function handleTranscriptUpdate(message: EkkoMessage) {
 chrome.runtime.onInstalled.addListener(() => {
   if (chrome.sidePanel?.setOptions) {
     chrome.sidePanel.setOptions({
-      path: 'dist/sidepanel.html',
+      path: 'sidepanel.html',
       enabled: true
     });
   }
+
+  if (chrome.sidePanel?.setPanelBehavior) {
+    chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+  }
 });
+
+if (chrome.action?.onClicked) {
+  chrome.action.onClicked.addListener(async () => {
+    try {
+      await ensureSidePanelOpened();
+    } catch (error) {
+      console.warn('Unable to open Ekko side panel from action click', error);
+    }
+  });
+}
 
 chrome.commands.onCommand.addListener(async (command) => {
   switch (command) {
