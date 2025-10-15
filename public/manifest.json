@@ -45,6 +45,12 @@
   "side_panel": {
     "default_path": "sidepanel.html"
   },
+  "origin_trials": [
+    {
+      "trial": "__REPLACE_WITH_REWRITER_ORIGIN_TRIAL_TOKEN__",
+      "features": ["ChromeAIRewriter", "ChromeAIWriter"]
+    }
+  ],
   "host_permissions": [
     "<all_urls>"
   ]
