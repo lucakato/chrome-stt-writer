@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { EkkoMessage } from '@shared/messages';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMicrophonePermission } from '@shared/hooks/useMicrophonePermission';
+import { useSpeechRecorder } from '@shared/hooks/useSpeechRecorder';
+import type { EkkoMessage } from '@shared/messages';
 
 type RewritePreset =
   | 'concise-formal'
@@ -26,6 +27,19 @@ const rewritePresets: Array<{ id: RewritePreset; label: string }> = [
   { id: 'custom', label: 'Custom instructions' }
 ];
 
+const languageOptions: Array<{ value: string; label: string }> = [
+  { value: 'auto', label: 'Auto (browser locale)' },
+  { value: 'en-US', label: 'English (United States)' },
+  { value: 'en-GB', label: 'English (United Kingdom)' },
+  { value: 'fr-FR', label: 'Français (France)' },
+  { value: 'es-ES', label: 'Español (España)' },
+  { value: 'de-DE', label: 'Deutsch (Deutschland)' },
+  { value: 'pt-BR', label: 'Português (Brasil)' },
+  { value: 'ja-JP', label: '日本語' },
+  { value: 'ko-KR', label: '한국어' },
+  { value: 'zh-CN', label: '中文（简体）' }
+];
+
 function formatPermission(status: ReturnType<typeof useMicrophonePermission>['status']) {
   switch (status) {
     case 'granted':
@@ -44,16 +58,60 @@ function formatPermission(status: ReturnType<typeof useMicrophonePermission>['st
 
 export default function App() {
   const { status: micStatus, requestPermission, error: micError } = useMicrophonePermission();
-  const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [rewritePreset, setRewritePreset] = useState<RewritePreset>('concise-formal');
   const [directInsertEnabled, setDirectInsertEnabled] = useState(false);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [streamingSummary, setStreamingSummary] = useState<string | null>(null);
-  const [pendingSync, setPendingSync] = useState<number | null>(null);
+  const [language, setLanguage] = useState<string>(() => navigator.language ?? 'en-US');
+
+  const pendingSyncRef = useRef<number | null>(null);
+  const lastSyncedRef = useRef<string>('');
 
   const permissionMeta = useMemo(() => formatPermission(micStatus), [micStatus]);
   const isMicGranted = micStatus === 'granted';
+
+  const chromeVersion = useMemo(() => {
+    const uaData = (navigator as unknown as { userAgentData?: { brands?: Array<{ version?: string }> } }).userAgentData;
+    if (uaData?.brands?.length) {
+      return uaData.brands[0]?.version ?? '138+';
+    }
+    const match = navigator.userAgent.match(/Chrome\/(\d+)/);
+    return match ? match[1] : '138+';
+  }, []);
+
+  const normalizedLanguage = useMemo(() => {
+    if (language === 'auto') {
+      return navigator.language ?? 'en-US';
+    }
+    return language;
+  }, [language]);
+
+  const appendFinalSegment = useCallback((segment: string) => {
+    setTranscript((prev) => {
+      if (!prev) {
+        return segment;
+      }
+      const needsSpace = /[\s\n\r]$/.test(prev) ? '' : ' ';
+      return `${prev}${needsSpace}${segment}`.trimStart();
+    });
+  }, []);
+
+  const {
+    isSupported: sttSupported,
+    isListening,
+    error: sttError,
+    interimTranscript,
+    start: startRecording,
+    stop: stopRecording,
+    resetError: resetSttError,
+    clearInterim
+  } = useSpeechRecorder({
+    language: normalizedLanguage,
+    onFinalResult: appendFinalSegment
+  });
+
+  const isRecording = isListening;
 
   const handleToggleRecording = useCallback(async () => {
     if (!isMicGranted) {
@@ -63,49 +121,78 @@ export default function App() {
       }
     }
 
-    setIsRecording((prev) => !prev);
-  }, [isMicGranted, requestPermission]);
-
-  const handleSummarize = useCallback(() => {
-    if (!transcript.trim()) {
+    if (isRecording) {
+      stopRecording();
       return;
     }
+
+    if (!sttSupported) {
+      return;
+    }
+
+    resetSttError();
+    const started = startRecording();
+    if (!started) {
+      console.warn('Speech recognition failed to start.');
+    }
+  }, [isMicGranted, isRecording, requestPermission, resetSttError, startRecording, stopRecording, sttSupported]);
+
+  const displayTranscript = useMemo(() => {
+    if (!isRecording || !interimTranscript) {
+      return transcript;
+    }
+
+    const needsSpace =
+      transcript.length === 0 || /[\s\n\r]$/.test(transcript) ? '' : ' ';
+    return `${transcript}${needsSpace}${interimTranscript}`;
+  }, [interimTranscript, isRecording, transcript]);
+
+  const activeTranscript = useMemo(() => displayTranscript.trim(), [displayTranscript]);
+
+  const handleSummarize = useCallback(() => {
+    if (!activeTranscript) {
+      return;
+    }
+
+    setTranscript(activeTranscript);
     // Placeholder for Summarizer API integration.
     setStreamingSummary('Summaries will appear here once the Summarizer API is wired in.');
     setHistory((entries) => [
       {
         id: crypto.randomUUID(),
-        title: transcript.slice(0, 60) || 'Untitled transcript',
+        title: activeTranscript.slice(0, 60) || 'Untitled transcript',
         createdAt: new Date().toLocaleTimeString(),
         actions: ['Summarized']
       },
       ...entries
     ]);
-  }, [transcript]);
+  }, [activeTranscript]);
 
   const handleRewrite = useCallback(() => {
-    if (!transcript.trim()) {
+    if (!activeTranscript) {
       return;
     }
+
+    setTranscript(activeTranscript);
     setHistory((entries) => [
       {
         id: crypto.randomUUID(),
-        title: transcript.slice(0, 60) || 'Untitled transcript',
+        title: activeTranscript.slice(0, 60) || 'Untitled transcript',
         createdAt: new Date().toLocaleTimeString(),
         actions: [`Rewritten (${rewritePreset})`]
       },
       ...entries
     ]);
-  }, [transcript, rewritePreset]);
+  }, [activeTranscript, rewritePreset]);
 
   const handleCopy = useCallback(async () => {
-    if (!transcript.trim()) return;
+    if (!activeTranscript) return;
     try {
-      await navigator.clipboard.writeText(transcript);
+      await navigator.clipboard.writeText(activeTranscript);
     } catch (copyError) {
       console.warn('Unable to copy transcript', copyError);
     }
-  }, [transcript]);
+  }, [activeTranscript]);
 
   const handleDirectInsertToggle = useCallback(
     (enabled: boolean) => {
@@ -123,28 +210,40 @@ export default function App() {
   );
 
   useEffect(() => {
-    if (pendingSync) {
-      window.clearTimeout(pendingSync);
+    if (pendingSyncRef.current) {
+      window.clearTimeout(pendingSyncRef.current);
     }
 
-    const timeout = window.setTimeout(() => {
+    const payloadTranscript = displayTranscript;
+
+    pendingSyncRef.current = window.setTimeout(() => {
+      if (payloadTranscript === lastSyncedRef.current) {
+        return;
+      }
+
       chrome.runtime
         ?.sendMessage({
           type: 'ekko/transcript/update',
           payload: {
-            transcript,
+            transcript: payloadTranscript,
             origin: 'panel'
           }
         } satisfies EkkoMessage)
+        .then(() => {
+          lastSyncedRef.current = payloadTranscript;
+        })
         .catch((error: unknown) => {
           console.warn('Unable to sync transcript to background', error);
         });
     }, 150);
 
-    setPendingSync(timeout);
-
-    return () => window.clearTimeout(timeout);
-  }, [transcript]);
+    return () => {
+      if (pendingSyncRef.current) {
+        window.clearTimeout(pendingSyncRef.current);
+        pendingSyncRef.current = null;
+      }
+    };
+  }, [displayTranscript]);
 
   return (
     <div className="app" role="application">
@@ -153,7 +252,7 @@ export default function App() {
           <span className="brand__title">Ekko: Write with Voice</span>
           <span className="brand__subtitle">Live capture • On-device AI polish</span>
         </div>
-        <span className="pill">Chrome {navigator.userAgentData?.brands?.[0]?.version ?? '138+'}</span>
+        <span className="pill">Chrome {chromeVersion}</span>
       </header>
 
       <section className="panel-section" aria-labelledby="capture-section-title">
@@ -162,7 +261,7 @@ export default function App() {
             type="button"
             className="record-button"
             onClick={handleToggleRecording}
-            disabled={micStatus === 'pending'}
+            disabled={micStatus === 'pending' || (!sttSupported && !isRecording)}
           >
             {isRecording ? 'Stop recording' : 'Start recording'}
             <span
@@ -185,6 +284,12 @@ export default function App() {
           )}
         </div>
         {micError && <p className="danger">{micError}</p>}
+        {sttError && <p className="danger">{sttError}</p>}
+        {!sttSupported && (
+          <p className="danger">
+            Live speech-to-text is not available in this browser. Try Chrome on desktop (138+).
+          </p>
+        )}
       </section>
 
       <section className="panel-section" aria-labelledby="transcript-title">
@@ -193,15 +298,18 @@ export default function App() {
         </h2>
         <textarea
           className="transcript-area"
-          value={transcript}
+          value={displayTranscript}
           placeholder="Start speaking to see your transcript…"
-          onChange={(event) => setTranscript(event.target.value)}
+          onChange={(event) => {
+            setTranscript(event.target.value);
+            clearInterim();
+          }}
         />
         <div className="actions-toolbar" role="toolbar" aria-label="AI Actions">
           <button
             type="button"
             className="button button--primary"
-            disabled={!transcript.trim()}
+            disabled={!activeTranscript}
             onClick={handleSummarize}
           >
             Summarize
@@ -218,16 +326,11 @@ export default function App() {
                 </option>
               ))}
             </select>
-            <button
-              type="button"
-              className="button"
-              disabled={!transcript.trim()}
-              onClick={handleRewrite}
-            >
+            <button type="button" className="button" disabled={!activeTranscript} onClick={handleRewrite}>
               Polish
             </button>
           </div>
-          <button type="button" className="button" disabled={!transcript.trim()} onClick={handleCopy}>
+          <button type="button" className="button" disabled={!activeTranscript} onClick={handleCopy}>
             Copy
           </button>
         </div>
@@ -243,6 +346,21 @@ export default function App() {
         <h2 id="settings-title" className="section-title">
           Session Settings
         </h2>
+        <div className="toggle-row">
+          <label htmlFor="language-select">Recognition language</label>
+          <select
+            id="language-select"
+            className="select"
+            value={language}
+            onChange={(event) => setLanguage(event.target.value)}
+          >
+            {languageOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
         <div className="toggle-row">
           <label htmlFor="direct-insert-toggle">Direct Insert Mode</label>
           <input
