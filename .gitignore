@@ -1,0 +1,22 @@
+# Node & package managers
+node_modules/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+.npm/
+
+# Build output
+dist/
+
+# Environment & tooling
+.env
+.env.*
+
+# OS / Editor cruft
+.DS_Store
+Thumbs.db
+*.log
+
+# Extension packaging artifacts
+*.pem
+.chrome-extension-id

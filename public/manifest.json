@@ -1,0 +1,51 @@
+{
+  "manifest_version": 3,
+  "name": "Ekko: Write with Voice",
+  "description": "Capture speech, summarize, and rewrite text directly in Chrome’s side panel using on-device AI.",
+  "version": "0.1.0",
+  "action": {
+    "default_title": "Ekko: Write with Voice"
+  },
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting",
+    "sidePanel"
+  ],
+  "commands": {
+    "_execute_action": {
+      "description": "Open Ekko"
+    },
+    "toggle-recording": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Period",
+        "mac": "Command+Shift+Period"
+      },
+      "description": "Start or stop Ekko recording"
+    },
+    "summarize-selection": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+S",
+        "mac": "Command+Shift+S"
+      },
+      "description": "Summarize the current transcript"
+    },
+    "rewrite-selection": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+R",
+        "mac": "Command+Shift+R"
+      },
+      "description": "Rewrite the current transcript with the last preset"
+    }
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "host_permissions": [
+    "<all_urls>"
+  ]
+}
