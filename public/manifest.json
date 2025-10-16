@@ -11,7 +11,7 @@
     "activeTab",
     "scripting",
     "sidePanel",
-    "aiLanguage"
+    "languageModel"
   ],
   "commands": {
     "_execute_action": {

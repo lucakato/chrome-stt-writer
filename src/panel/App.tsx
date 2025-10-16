@@ -8,6 +8,11 @@ import {
   summarizeText,
   type SummarizerAvailabilityStatus
 } from '@shared/ai/summarizer';
+import {
+  getRewriterAvailability,
+  rewriteText,
+  type RewriterAvailabilityStatus
+} from '@shared/ai/rewriter';
 
 type RewritePreset =
   | 'concise-formal'
@@ -23,6 +28,7 @@ type HistoryEntry = {
   createdAt: string;
   actions: string[];
   summary?: string;
+  rewrite?: string;
 };
 
 const rewritePresets: Array<{ id: RewritePreset; label: string }> = [
@@ -33,6 +39,54 @@ const rewritePresets: Array<{ id: RewritePreset; label: string }> = [
   { id: 'action-items', label: 'Action items' },
   { id: 'custom', label: 'Custom instructions' }
 ];
+
+type RewritePresetConfig = {
+  sharedContext?: string;
+  context?: string;
+  tone?: string;
+  format?: string;
+  length?: string;
+};
+
+const BASE_SHARED_CONTEXT = 'Voice note rewrite to help organize research and meeting insights.';
+
+const rewritePresetConfig: Record<RewritePreset, RewritePresetConfig> = {
+  'concise-formal': {
+    sharedContext: BASE_SHARED_CONTEXT,
+    context: 'Rewrite the text to be concise, professional, and suitable for business communication.',
+    tone: 'more-formal',
+    length: 'shorter',
+    format: 'plain-text'
+  },
+  expand: {
+    sharedContext: BASE_SHARED_CONTEXT,
+    context: 'Expand the text with helpful details while keeping the original intent clear.',
+    length: 'longer',
+    format: 'plain-text'
+  },
+  casual: {
+    sharedContext: BASE_SHARED_CONTEXT,
+    context: 'Rewrite the text with a relaxed, friendly tone while keeping all key information.',
+    tone: 'more-casual',
+    format: 'plain-text'
+  },
+  bullet: {
+    sharedContext: BASE_SHARED_CONTEXT,
+    context: 'Rewrite the text as a concise bullet list highlighting the key points.',
+    format: 'bullet'
+  },
+  'action-items': {
+    sharedContext: BASE_SHARED_CONTEXT,
+    context: 'Rewrite the text as a list of clear action items with imperative verbs and owners where possible.',
+    format: 'plain-text',
+    tone: 'more-direct'
+  },
+  custom: {
+    sharedContext: BASE_SHARED_CONTEXT,
+    context: 'Rewrite the text to improve clarity, flow, and readability while preserving the author’s intent.',
+    format: 'plain-text'
+  }
+};
 
 const languageOptions: Array<{ value: string; label: string }> = [
   { value: 'auto', label: 'Auto (browser locale)' },
@@ -76,6 +130,10 @@ export default function App() {
   const [summarizerError, setSummarizerError] = useState<string | null>(null);
   const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
   const [summarizerMessage, setSummarizerMessage] = useState<string | null>(null);
+  const [rewriterState, setRewriterState] = useState<'idle' | 'checking' | RewriterAvailabilityStatus | 'rewriting'>('idle');
+  const [rewriterError, setRewriterError] = useState<string | null>(null);
+  const [rewriterMessage, setRewriterMessage] = useState<string | null>(null);
+  const [rewritePreview, setRewritePreview] = useState<string | null>(null);
 
   const pendingSyncRef = useRef<number | null>(null);
   const lastSyncedRef = useRef<string>('');
@@ -172,6 +230,14 @@ export default function App() {
   const isSummarizerBusy =
     summarizerState === 'checking' || summarizerState === 'downloadable' || summarizerState === 'summarizing';
   const summarizerUnavailable = summarizerState === 'unsupported' || summarizerState === 'unavailable';
+  const isRewriting = rewriterState === 'rewriting';
+  const isRewriterBusy =
+    rewriterState === 'checking' || rewriterState === 'downloadable' || rewriterState === 'rewriting';
+  const rewriterUnavailable = rewriterState === 'unsupported' || rewriterState === 'unavailable';
+  const rewritePresetLabel = useMemo(
+    () => rewritePresets.find((preset) => preset.id === rewritePreset)?.label ?? 'Rewrite',
+    [rewritePreset]
+  );
 
   const handleSummarize = useCallback(async () => {
     if (!activeTranscript) {
@@ -220,16 +286,21 @@ export default function App() {
       setStreamingSummary((current) => current ?? result.summary);
 
       const entryId = activeSessionIdRef.current ?? crypto.randomUUID();
-      setHistory((entries) => [
-        {
+      activeSessionIdRef.current = entryId;
+      setHistory((entries) => {
+        const existing = entries.find((entry) => entry.id === entryId);
+        const actions = Array.from(new Set(['Summarized', ...(existing?.actions ?? [])]));
+        const updatedEntry: HistoryEntry = {
           id: entryId,
           title: activeTranscript.slice(0, 60) || 'Untitled transcript',
-          createdAt: new Date().toLocaleTimeString(),
-          actions: ['Summarized'],
-          summary: result.summary
-        },
-        ...entries
-      ]);
+          createdAt: existing?.createdAt ?? new Date().toLocaleTimeString(),
+          actions,
+          summary: result.summary,
+          rewrite: existing?.rewrite
+        };
+
+        return [updatedEntry, ...entries.filter((entry) => entry.id !== entryId)];
+      });
 
       chrome.runtime
         ?.sendMessage({
@@ -264,22 +335,105 @@ export default function App() {
     }
   }, [activeTranscript, outputLanguage]);
 
-  const handleRewrite = useCallback(() => {
+  const handleRewrite = useCallback(async () => {
     if (!activeTranscript) {
       return;
     }
 
+    const presetConfig = rewritePresetConfig[rewritePreset] ?? rewritePresetConfig.custom;
     setTranscript(activeTranscript);
-    setHistory((entries) => [
-      {
-        id: crypto.randomUUID(),
-        title: activeTranscript.slice(0, 60) || 'Untitled transcript',
-        createdAt: new Date().toLocaleTimeString(),
-        actions: [`Rewritten (${rewritePreset})`]
-      },
-      ...entries
-    ]);
-  }, [activeTranscript, rewritePreset]);
+    setRewriterError(null);
+    setRewriterMessage('Generating rewrite…');
+    setRewriterState('rewriting');
+    setRewritePreview(null);
+
+    try {
+      const result = await rewriteText({
+        text: activeTranscript,
+        sharedContext: presetConfig.sharedContext ?? BASE_SHARED_CONTEXT,
+        context: presetConfig.context,
+        tone: presetConfig.tone,
+        format: presetConfig.format,
+        length: presetConfig.length,
+        outputLanguage,
+        onStatusChange: (status) => {
+          if (status === 'downloadable') {
+            setRewriterState('downloadable');
+            setRewriterError(null);
+            setRewriterMessage('Downloading on-device model…');
+          }
+          if (status === 'ready') {
+            setRewriterState('rewriting');
+            setRewriterError(null);
+            setRewriterMessage('Model ready. Rewriting…');
+          }
+        },
+        onDownloadProgress: (progress) => {
+          setRewriterState('downloadable');
+          setRewriterError(null);
+          setRewriterMessage(`Downloading on-device model… ${Math.round(progress * 100)}%`);
+        },
+        onChunk: (chunk) => {
+          setRewritePreview(chunk);
+        }
+      });
+
+      setRewriterState('ready');
+      setRewriterMessage(null);
+      setRewriterError(null);
+      setRewritePreview(result.content);
+
+      const entryId = activeSessionIdRef.current ?? crypto.randomUUID();
+      activeSessionIdRef.current = entryId;
+      const rewriteActionLabel = `Rewritten (${rewritePresetLabel})`;
+      setHistory((entries) => {
+        const existing = entries.find((entry) => entry.id === entryId);
+        const actions = Array.from(new Set([rewriteActionLabel, ...(existing?.actions ?? [])]));
+        const updatedEntry: HistoryEntry = {
+          id: entryId,
+          title: activeTranscript.slice(0, 60) || 'Untitled transcript',
+          createdAt: existing?.createdAt ?? new Date().toLocaleTimeString(),
+          actions,
+          summary: existing?.summary,
+          rewrite: result.content
+        };
+
+        return [updatedEntry, ...entries.filter((entry) => entry.id !== entryId)];
+      });
+
+      chrome.runtime
+        ?.sendMessage({
+          type: 'ekko/ai/rewrite',
+          payload: {
+            sessionId: activeSessionIdRef.current ?? undefined,
+            preset: rewritePreset,
+            transcript: activeTranscript,
+            rewrite: result.content
+          }
+        } satisfies EkkoMessage)
+        .then((response: EkkoResponse | undefined) => {
+          if (response?.ok && response.data && typeof response.data === 'object') {
+            const { id } = response.data as { id?: string };
+            if (typeof id === 'string') {
+              activeSessionIdRef.current = id;
+            }
+          }
+        })
+        .catch((error: unknown) => {
+          console.warn('Unable to persist rewrite to background', error);
+        });
+    } catch (error) {
+      let message = error instanceof Error ? error.message : 'Rewrite failed.';
+      if (/enough space/i.test(message)) {
+        message =
+          'Chrome still reports insufficient disk space for Gemini Nano (~22 GB free required). Check chrome://on-device-internals and retry.';
+      }
+      setRewriterState('error');
+      setRewriterError(message);
+      setRewriterMessage(null);
+      setRewritePreview(null);
+    }
+  }, [activeTranscript, outputLanguage, rewritePreset, rewritePresetLabel]);
 
   const handleCopy = useCallback(async () => {
     if (!activeTranscript) return;
@@ -371,6 +525,57 @@ export default function App() {
       setSummarizerState('ready');
       setSummarizerError(null);
       setSummarizerMessage(null);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void (async () => {
+      setRewriterState('checking');
+      const availability = await getRewriterAvailability();
+      if (cancelled) {
+        return;
+      }
+
+      if (availability.status === 'error') {
+        const message = availability.message ?? 'Rewriter API error.';
+        setRewriterState('error');
+        setRewriterError(message);
+        setRewriterMessage(null);
+        return;
+      }
+
+      if (availability.status === 'unsupported') {
+        const message = availability.message ?? 'Rewriter API is not supported on this device.';
+        setRewriterState('unsupported');
+        setRewriterError(message);
+        setRewriterMessage(null);
+        return;
+      }
+
+      if (availability.status === 'unavailable') {
+        const message = availability.message ?? 'Rewriter is currently unavailable.';
+        setRewriterState('unavailable');
+        setRewriterError(message);
+        setRewriterMessage(null);
+        return;
+      }
+
+      if (availability.status === 'downloadable') {
+        setRewriterState('downloadable');
+        setRewriterError(null);
+        setRewriterMessage('First rewrite may take a moment while the on-device model downloads.');
+        return;
+      }
+
+      setRewriterState('ready');
+      setRewriterError(null);
+      setRewriterMessage(null);
     })();
 
     return () => {
@@ -547,8 +752,13 @@ export default function App() {
                 </option>
               ))}
             </select>
-            <button type="button" className="button" disabled={!activeTranscript} onClick={handleRewrite}>
-              Polish
+            <button
+              type="button"
+              className="button"
+              disabled={!activeTranscript || isRewriterBusy || rewriterUnavailable}
+              onClick={handleRewrite}
+            >
+              {isRewriterBusy ? 'Polishing…' : 'Polish'}
             </button>
           </div>
           <button type="button" className="button" disabled={!activeTranscript} onClick={handleCopy}>
@@ -563,6 +773,16 @@ export default function App() {
           <div className="summary-preview">
             <strong className="summary-preview__title">Summary Preview</strong>
             <p className="summary-preview__body">{streamingSummary}</p>
+          </div>
+        )}
+        <div className="rewrite-status" aria-live="polite">
+          {rewriterMessage && <p className="helper-text">{rewriterMessage}</p>}
+          {rewriterError && <p className="helper-text danger">{rewriterError}</p>}
+        </div>
+        {rewritePreview && (
+          <div className="summary-preview rewrite-preview">
+            <strong className="summary-preview__title">Rewrite Preview • {rewritePresetLabel}</strong>
+            <p className="summary-preview__body">{rewritePreview}</p>
           </div>
         )}
       </section>
@@ -618,7 +838,16 @@ export default function App() {
                   <p className="history-item__subtitle">
                     {entry.createdAt} • {entry.actions.join(', ')}
                   </p>
-                  {entry.summary && <p className="history-item__summary">{entry.summary}</p>}
+                  {entry.summary && (
+                    <p className="history-item__summary">
+                      <strong className="history-item__summary-label">Summary:</strong> {entry.summary}
+                    </p>
+                  )}
+                  {entry.rewrite && (
+                    <p className="history-item__summary">
+                      <strong className="history-item__summary-label">Rewrite:</strong> {entry.rewrite}
+                    </p>
+                  )}
                 </div>
                 <button type="button" className="button">
                   Open

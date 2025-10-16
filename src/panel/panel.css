@@ -291,6 +291,12 @@ body {
   -webkit-line-clamp: 2;
 }
 
+.history-item__summary-label {
+  font-weight: 600;
+  margin-right: 4px;
+  color: var(--text-secondary);
+}
+
 .empty-state {
   text-align: center;
   color: var(--text-secondary);
@@ -337,6 +343,18 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.rewrite-status {
+  min-height: 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.rewrite-preview {
+  margin-top: 8px;
 }
 
 .summary-preview__title {
@@ -418,6 +436,11 @@ body {
   }
 
   .summary-preview {
+    border-color: rgba(174, 182, 255, 0.35);
+    background: rgba(89, 104, 242, 0.18);
+  }
+
+  .rewrite-preview {
     border-color: rgba(174, 182, 255, 0.35);
     background: rgba(89, 104, 242, 0.18);
   }

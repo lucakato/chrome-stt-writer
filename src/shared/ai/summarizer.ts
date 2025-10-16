@@ -149,7 +149,11 @@ function ensureUserActivation() {
   }
 }
 
-async function createSummarizer(onDownloadProgress?: (progress: number) => void, onStatusChange?: (status: SummarizerAvailabilityStatus) => void) {
+async function createSummarizer(
+  onDownloadProgress?: (progress: number) => void,
+  onStatusChange?: (status: SummarizerAvailabilityStatus) => void,
+  outputLanguage?: string
+) {
   const detection = detectSummarizer();
   if (!detection) {
     throw new Error('Summarizer API is not supported in this environment.');
@@ -175,7 +179,8 @@ async function createSummarizer(onDownloadProgress?: (progress: number) => void,
       monitor.addEventListener('downloadprogress', (event: SummarizerDownloadProgressEvent) => {
         onDownloadProgress(Math.min(Math.max(event.loaded, 0), 1));
       });
-    }
+    },
+    outputLanguage
   });
 
   try {
@@ -212,7 +217,11 @@ export async function summarizeText(options: SummarizeRequest): Promise<Summariz
     throw new Error(availability.message ?? 'Summarizer API is unavailable right now.');
   }
 
-  const summarizer = await createSummarizer(options.onDownloadProgress, options.onStatusChange);
+  const summarizer = await createSummarizer(
+    options.onDownloadProgress,
+    options.onStatusChange,
+    options.outputLanguage
+  );
   const provider = detectSummarizer()?.provider ?? 'standard';
 
   const summarizerOptions = getSummarizerOptions(options);

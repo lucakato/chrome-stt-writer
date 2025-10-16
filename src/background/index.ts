@@ -1,5 +1,5 @@
 import { EkkoMessage, EkkoResponse } from '@shared/messages';
-import { upsertTranscript } from '@shared/storage';
+import { listSessions, upsertTranscript } from '@shared/storage';
 
 const DIRECT_INSERT_SCRIPT_ID = 'ekko-direct-insert-script';
 let directInsertEnabled = false;
@@ -96,6 +96,31 @@ async function handleSummarizeUpdate(message: Extract<EkkoMessage, { type: 'ekko
   return session;
 }
 
+async function handleRewriteUpdate(message: Extract<EkkoMessage, { type: 'ekko/ai/rewrite' }>) {
+  const sessions = await listSessions();
+  const existing = message.payload.sessionId
+    ? sessions.find((entry) => entry.id === message.payload.sessionId)
+    : undefined;
+
+  const rewriteEntry = {
+    id: crypto.randomUUID(),
+    preset: message.payload.preset,
+    content: message.payload.rewrite,
+    createdAt: Date.now()
+  } as const;
+
+  const rewrites = existing?.rewrites ? [rewriteEntry, ...existing.rewrites] : [rewriteEntry];
+
+  const session = await upsertTranscript(message.payload.transcript, {
+    id: message.payload.sessionId,
+    rewrites,
+    summary: existing?.summary,
+    actions: ['Rewritten']
+  });
+
+  return session;
+}
+
 chrome.runtime.onInstalled.addListener(() => {
   if (chrome.sidePanel?.setOptions) {
     chrome.sidePanel.setOptions({
@@ -153,6 +178,11 @@ chrome.runtime.onMessage.addListener((message: EkkoMessage, _sender, sendRespons
         }
         case 'ekko/ai/summarize': {
           const session = await handleSummarizeUpdate(message);
+          sendResponse({ ok: true, data: session } satisfies EkkoResponse);
+          break;
+        }
+        case 'ekko/ai/rewrite': {
+          const session = await handleRewriteUpdate(message);
           sendResponse({ ok: true, data: session } satisfies EkkoResponse);
           break;
         }

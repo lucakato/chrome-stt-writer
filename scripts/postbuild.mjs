@@ -61,7 +61,7 @@ async function patchManifest() {
     return;
   }
 
-  const trialEntries = manifest.origin_trials ?? [];
+  const trialEntries = Array.isArray(manifest.origin_trials) ? manifest.origin_trials : [];
   const patched = trialEntries.map((entry) => {
     if (entry.trial === PLACEHOLDER) {
       return { ...entry, trial: token };
