@@ -954,7 +954,7 @@ export default function App() {
 
     void (async () => {
       setSummarizerState('checking');
-      const availability = await getSummarizerAvailability();
+      const availability = await getSummarizerAvailability(outputLanguage);
       if (cancelled) {
         return;
       }
@@ -970,14 +970,14 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [outputLanguage]);
 
   useEffect(() => {
     let cancelled = false;
 
     void (async () => {
       setRewriterState('checking');
-      const availability = await getRewriterAvailability();
+      const availability = await getRewriterAvailability(outputLanguage);
       if (cancelled) return;
       setRewriterState(availability.status);
       if (availability.message) {
@@ -990,7 +990,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [outputLanguage]);
 
   useEffect(() => {
     if (mode !== 'compose') {

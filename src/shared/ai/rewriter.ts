@@ -28,7 +28,7 @@ export type RewriteResponse = {
 };
 
 type RewriterNamespaceLike = RewriterNamespace & {
-  availability(): Promise<unknown>;
+  availability(options?: RewriterAvailabilityOptions): Promise<unknown>;
   create(options?: RewriterCreateOptions): Promise<RewriterHandle>;
 };
 
@@ -107,7 +107,7 @@ function normalizeAvailability(raw: unknown): RewriterAvailabilityStatus {
   return 'unavailable';
 }
 
-export async function getRewriterAvailability(): Promise<RewriterAvailability> {
+export async function getRewriterAvailability(outputLanguage?: string): Promise<RewriterAvailability> {
   const detection = detectRewriter();
   if (!detection) {
     return {
@@ -118,7 +118,12 @@ export async function getRewriterAvailability(): Promise<RewriterAvailability> {
   }
 
   try {
-    const raw = await detection.api.availability();
+    let raw: unknown;
+    if (outputLanguage) {
+      raw = await detection.api.availability({ outputLanguage });
+    } else {
+      raw = await detection.api.availability();
+    }
     const status = normalizeAvailability(raw);
     let message: string | undefined;
 
@@ -210,7 +215,7 @@ export async function rewriteText(options: RewriteRequest): Promise<RewriteRespo
     throw new Error('Cannot rewrite empty text.');
   }
 
-  const availability = await getRewriterAvailability();
+  const availability = await getRewriterAvailability(options.outputLanguage);
 
   if (availability.status === 'unsupported') {
     throw new Error('Rewriter API is not supported on this device.');

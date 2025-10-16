@@ -31,17 +31,32 @@ function handleFocus(event: FocusEvent) {
   }
 }
 
+function resolveEditableTarget(): HTMLElement | null {
+  if (lastEditable && document.contains(lastEditable)) {
+    return lastEditable;
+  }
+
+  const activeElement = document.activeElement;
+  if (isEditableElement(activeElement)) {
+    lastEditable = activeElement;
+    return activeElement;
+  }
+
+  return null;
+}
+
 function applyTranscript(transcript: string) {
-  if (!lastEditable) {
+  const target = resolveEditableTarget();
+  if (!target) {
     return;
   }
 
-  if (lastEditable instanceof HTMLInputElement || lastEditable instanceof HTMLTextAreaElement) {
-    lastEditable.value = transcript;
-    lastEditable.dispatchEvent(new Event('input', { bubbles: true }));
-  } else if (lastEditable.isContentEditable) {
-    lastEditable.innerText = transcript;
-    lastEditable.dispatchEvent(new Event('input', { bubbles: true }));
+  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+    target.value = transcript;
+    target.dispatchEvent(new Event('input', { bubbles: true }));
+  } else if (target.isContentEditable) {
+    target.innerText = transcript;
+    target.dispatchEvent(new Event('input', { bubbles: true }));
   }
 }
 

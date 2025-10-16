@@ -27,7 +27,7 @@ export type SummarizeResponse = {
 };
 
 type SummarizerNamespaceLike = SummarizerNamespace & {
-  availability(): Promise<unknown>;
+  availability(options?: SummarizerAvailabilityOptions): Promise<unknown>;
   create(options?: SummarizerCreateOptions): Promise<SummarizerHandle>;
 };
 
@@ -106,7 +106,7 @@ function normalizeAvailability(raw: unknown): SummarizerAvailabilityStatus {
   return 'unavailable';
 }
 
-export async function getSummarizerAvailability(): Promise<SummarizerAvailability> {
+export async function getSummarizerAvailability(outputLanguage?: string): Promise<SummarizerAvailability> {
   const detection = detectSummarizer();
   if (!detection) {
     return {
@@ -117,7 +117,12 @@ export async function getSummarizerAvailability(): Promise<SummarizerAvailabilit
   }
 
   try {
-    const raw = await detection.api.availability();
+    let raw: unknown;
+    if (outputLanguage) {
+      raw = await detection.api.availability({ outputLanguage });
+    } else {
+      raw = await detection.api.availability();
+    }
     const status = normalizeAvailability(raw);
     let message: string | undefined;
 
@@ -207,7 +212,7 @@ export async function summarizeText(options: SummarizeRequest): Promise<Summariz
     throw new Error('Cannot summarize empty text.');
   }
 
-  const availability = await getSummarizerAvailability();
+  const availability = await getSummarizerAvailability(options.outputLanguage);
 
   if (availability.status === 'unsupported') {
     throw new Error('Summarizer API is not supported on this device.');

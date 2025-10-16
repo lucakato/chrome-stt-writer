@@ -165,12 +165,25 @@ async function applyDirectInsertText(text: string) {
     throw new Error('No active tab for direct insert.');
   }
 
-  await chrome.tabs.sendMessage(tabId, {
-    type: 'ekko/direct-insert/apply',
-    payload: { text }
-  } satisfies EkkoMessage).catch((error: unknown) => {
-    console.warn('Unable to apply direct insert text', error);
-  });
+  const sendApplyMessage = () =>
+    chrome.tabs.sendMessage(tabId, {
+      type: 'ekko/direct-insert/apply',
+      payload: { text }
+    } satisfies EkkoMessage);
+
+  try {
+    await sendApplyMessage();
+  } catch (error) {
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: ['content/directInsert.js']
+      });
+      await sendApplyMessage();
+    } catch (secondaryError) {
+      console.warn('Unable to apply direct insert text', secondaryError);
+    }
+  }
 }
 
 chrome.runtime.onInstalled.addListener(() => {

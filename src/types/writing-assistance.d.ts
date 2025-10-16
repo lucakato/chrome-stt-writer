@@ -45,6 +45,10 @@ declare global {
     ): void;
   }
 
+  interface SummarizerAvailabilityOptions {
+    outputLanguage?: string;
+  }
+
   interface SummarizerCreateOptions extends SummarizerOptions {
     monitor?: (monitor: SummarizerMonitor) => void;
   }
@@ -62,6 +66,10 @@ declare global {
     monitor?: (monitor: RewriterMonitor) => void;
   }
 
+  interface RewriterAvailabilityOptions {
+    outputLanguage?: string;
+  }
+
   interface RewriterHandle {
     rewrite(text: string, options?: RewriterOptions): Promise<string>;
     rewriteStreaming?(text: string, options?: RewriterOptions): Promise<AsyncIterable<string>> | AsyncIterable<string>;
@@ -69,7 +77,9 @@ declare global {
   }
 
   interface RewriterNamespace {
-    availability(): Promise<
+    availability(
+      options?: RewriterAvailabilityOptions
+    ): Promise<
       | SummarizerAvailabilityValue
       | { availability?: SummarizerAvailabilityValue; available?: SummarizerAvailabilityValue }
     >;
@@ -83,7 +93,9 @@ declare global {
   }
 
   interface SummarizerNamespace {
-    availability(): Promise<
+    availability(
+      options?: SummarizerAvailabilityOptions
+    ): Promise<
       | SummarizerAvailabilityValue
       | { availability?: SummarizerAvailabilityValue; available?: SummarizerAvailabilityValue }
     >;
