@@ -127,6 +127,13 @@ export function useSpeechRecorder({
         }
       };
 
+      const clearAutoStopTimer = () => {
+        if (timerRef.current) {
+          window.clearTimeout(timerRef.current);
+          timerRef.current = null;
+        }
+      };
+
       recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
         const message =
           event.error === 'aborted'
@@ -137,12 +144,14 @@ export function useSpeechRecorder({
         }
         setStatus('idle');
         setInterimTranscript('');
+        clearAutoStopTimer();
         cleanupRecognition();
       };
 
       recognition.onend = () => {
         setStatus((prev) => (prev === 'unsupported' ? prev : 'idle'));
         setInterimTranscript('');
+        clearAutoStopTimer();
         cleanupRecognition();
       };
 

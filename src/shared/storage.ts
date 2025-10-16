@@ -18,6 +18,7 @@ export type TranscriptSession = {
 };
 
 const STORAGE_KEY = 'ekko:sessions';
+const ACTIVE_SESSION_KEY = 'ekko:activeSessionId';
 
 async function readSessions(): Promise<TranscriptSession[]> {
   if (!chrome.storage?.local) {
@@ -53,9 +54,74 @@ export async function saveSession(session: TranscriptSession) {
   await writeSessions(sessions);
 }
 
+let activeSessionId: string | null = null;
+let activeSessionLoaded = false;
+
+async function ensureActiveSessionLoaded() {
+  if (activeSessionLoaded) {
+    return activeSessionId;
+  }
+
+  if (!chrome.storage?.local) {
+    activeSessionLoaded = true;
+    activeSessionId = null;
+    return activeSessionId;
+  }
+
+  const record = await chrome.storage.local.get(ACTIVE_SESSION_KEY);
+  const storedId = record[ACTIVE_SESSION_KEY];
+  activeSessionId = typeof storedId === 'string' ? storedId : null;
+  activeSessionLoaded = true;
+  return activeSessionId;
+}
+
+function persistActiveSession(id: string | null) {
+  if (!chrome.storage?.local) {
+    return;
+  }
+
+  if (id) {
+    chrome.storage.local.set({ [ACTIVE_SESSION_KEY]: id }).catch(() => {
+      /* noop */
+    });
+  } else {
+    chrome.storage.local.remove(ACTIVE_SESSION_KEY).catch(() => {
+      /* noop */
+    });
+  }
+}
+
 export async function upsertTranscript(transcript: string, metadata: Partial<TranscriptSession> = {}) {
   const sessions = await readSessions();
-  const currentId = metadata.id ?? sessions[0]?.id ?? crypto.randomUUID();
+  await ensureActiveSessionLoaded();
+  let currentId: string;
+
+  if (metadata.id) {
+    currentId = metadata.id;
+    activeSessionId = metadata.id;
+    persistActiveSession(activeSessionId);
+  } else {
+    const normalized = transcript.trim();
+
+    let candidateId: string | null = activeSessionId;
+
+    if (!candidateId && sessions.length > 0) {
+      candidateId = sessions[0].id;
+    }
+
+    if (normalized.length === 0) {
+      currentId = crypto.randomUUID();
+    } else if (candidateId && sessions.some((entry) => entry.id === candidateId)) {
+      currentId = candidateId;
+    } else if (sessions.length > 0) {
+      currentId = sessions[0].id;
+    } else {
+      currentId = crypto.randomUUID();
+    }
+
+    activeSessionId = currentId;
+    persistActiveSession(activeSessionId);
+  }
   const now = Date.now();
   const existing = sessions.find((entry) => entry.id === currentId);
 

@@ -160,9 +160,10 @@ export default function App() {
 
   const outputLanguage = useMemo(() => {
     const allowed = ['en', 'es', 'ja'];
-    const locale = (navigator.language || 'en').slice(0, 2).toLowerCase();
-    return allowed.includes(locale) ? locale : 'en';
-  }, []);
+    const locale = normalizedLanguage.toLowerCase();
+    const primary = locale.split('-')[0];
+    return allowed.includes(primary) ? primary : 'en';
+  }, [normalizedLanguage]);
 
   const appendFinalSegment = useCallback((segment: string) => {
     setTranscript((prev) => {
@@ -227,12 +228,10 @@ export default function App() {
   const activeTranscript = useMemo(() => displayTranscript.trim(), [displayTranscript]);
 
   const isSummarizing = summarizerState === 'summarizing';
-  const isSummarizerBusy =
-    summarizerState === 'checking' || summarizerState === 'downloadable' || summarizerState === 'summarizing';
+  const isSummarizerBusy = summarizerState === 'checking' || summarizerState === 'summarizing';
   const summarizerUnavailable = summarizerState === 'unsupported' || summarizerState === 'unavailable';
   const isRewriting = rewriterState === 'rewriting';
-  const isRewriterBusy =
-    rewriterState === 'checking' || rewriterState === 'downloadable' || rewriterState === 'rewriting';
+  const isRewriterBusy = rewriterState === 'checking' || rewriterState === 'rewriting';
   const rewriterUnavailable = rewriterState === 'unsupported' || rewriterState === 'unavailable';
   const rewritePresetLabel = useMemo(
     () => rewritePresets.find((preset) => preset.id === rewritePreset)?.label ?? 'Rewrite',
@@ -244,12 +243,14 @@ export default function App() {
       return;
     }
 
-    setTranscript(activeTranscript);
+    if (!isRecording || !interimTranscript.trim()) {
+      setTranscript(activeTranscript);
+    }
     setSummarizerError(null);
     setSummarizerState('summarizing');
     setSummarizerMessage('Generating summary…');
     setDownloadProgress(null);
-    setStreamingSummary('');
+    setStreamingSummary(null);
 
     try {
       const result = await summarizeText({
@@ -258,7 +259,6 @@ export default function App() {
         outputLanguage,
         onStatusChange: (status) => {
           if (status === 'downloadable') {
-            setSummarizerState('downloadable');
             setSummarizerError(null);
             setSummarizerMessage('Downloading on-device model…');
           }
@@ -269,7 +269,6 @@ export default function App() {
           }
         },
         onDownloadProgress: (progress) => {
-          setSummarizerState('downloadable');
           setSummarizerError(null);
           setSummarizerMessage(`Downloading on-device model… ${Math.round(progress * 100)}%`);
           setDownloadProgress(progress);
@@ -283,7 +282,7 @@ export default function App() {
       setSummarizerMessage(null);
       setSummarizerError(null);
       setDownloadProgress(null);
-      setStreamingSummary((current) => current ?? result.summary);
+      setStreamingSummary(result.summary);
 
       const entryId = activeSessionIdRef.current ?? crypto.randomUUID();
       activeSessionIdRef.current = entryId;
@@ -315,7 +314,25 @@ export default function App() {
           if (response?.ok && response.data && typeof response.data === 'object') {
             const { id } = response.data as { id?: string };
             if (typeof id === 'string') {
-              activeSessionIdRef.current = id;
+          const persistedId = id;
+          setHistory((entries) => {
+            const index = entries.findIndex((entry) => entry.id === entryId);
+            if (index === -1) {
+              return entries;
+            }
+
+            const existingEntry = entries[index];
+            const updatedEntry: HistoryEntry = {
+              ...existingEntry,
+              id: persistedId
+            };
+
+            const next = [...entries];
+            next.splice(index, 1);
+            return [updatedEntry, ...next];
+          });
+
+          activeSessionIdRef.current = persistedId;
             }
           }
         })
@@ -333,7 +350,7 @@ export default function App() {
       setSummarizerMessage(null);
       setDownloadProgress(null);
     }
-  }, [activeTranscript, outputLanguage]);
+  }, [activeTranscript, outputLanguage, isRecording, interimTranscript]);
 
   const handleRewrite = useCallback(async () => {
     if (!activeTranscript) {
@@ -341,7 +358,9 @@ export default function App() {
     }
 
     const presetConfig = rewritePresetConfig[rewritePreset] ?? rewritePresetConfig.custom;
-    setTranscript(activeTranscript);
+    if (!isRecording || !interimTranscript.trim()) {
+      setTranscript(activeTranscript);
+    }
     setRewriterError(null);
     setRewriterMessage('Generating rewrite…');
     setRewriterState('rewriting');
@@ -358,7 +377,6 @@ export default function App() {
         outputLanguage,
         onStatusChange: (status) => {
           if (status === 'downloadable') {
-            setRewriterState('downloadable');
             setRewriterError(null);
             setRewriterMessage('Downloading on-device model…');
           }
@@ -369,7 +387,6 @@ export default function App() {
           }
         },
         onDownloadProgress: (progress) => {
-          setRewriterState('downloadable');
           setRewriterError(null);
           setRewriterMessage(`Downloading on-device model… ${Math.round(progress * 100)}%`);
         },
@@ -415,7 +432,25 @@ export default function App() {
           if (response?.ok && response.data && typeof response.data === 'object') {
             const { id } = response.data as { id?: string };
             if (typeof id === 'string') {
-              activeSessionIdRef.current = id;
+              const persistedId = id;
+              setHistory((entries) => {
+                const index = entries.findIndex((entry) => entry.id === entryId);
+                if (index === -1) {
+                  return entries;
+                }
+
+                const existingEntry = entries[index];
+                const updatedEntry: HistoryEntry = {
+                  ...existingEntry,
+                  id: persistedId
+                };
+
+                const next = [...entries];
+                next.splice(index, 1);
+                return [updatedEntry, ...next];
+              });
+
+              activeSessionIdRef.current = persistedId;
             }
           }
         })
@@ -433,7 +468,7 @@ export default function App() {
       setRewriterMessage(null);
       setRewritePreview(null);
     }
-  }, [activeTranscript, outputLanguage, rewritePreset, rewritePresetLabel]);
+  }, [activeTranscript, outputLanguage, rewritePreset, rewritePresetLabel, isRecording, interimTranscript]);
 
   const handleCopy = useCallback(async () => {
     if (!activeTranscript) return;
@@ -516,7 +551,7 @@ export default function App() {
       }
 
       if (availability.status === 'downloadable') {
-        setSummarizerState('downloadable');
+        setSummarizerState('idle');
         setSummarizerError(null);
         setSummarizerMessage('First summary may take a moment while the on-device model downloads.');
         return;
@@ -567,7 +602,7 @@ export default function App() {
       }
 
       if (availability.status === 'downloadable') {
-        setRewriterState('downloadable');
+        setRewriterState('idle');
         setRewriterError(null);
         setRewriterMessage('First rewrite may take a moment while the on-device model downloads.');
         return;

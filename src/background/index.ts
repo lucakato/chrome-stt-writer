@@ -40,6 +40,13 @@ async function toggleDirectInsert(enabled: boolean) {
         persistAcrossSessions: false
       }
     ]);
+
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['content/directInsert.js']
+    }).catch(() => {
+      /* Script may already be injected */
+    });
   } else {
     await chrome.scripting.unregisterContentScripts({ ids: [DIRECT_INSERT_SCRIPT_ID] }).catch(() => {
       /* noop */
