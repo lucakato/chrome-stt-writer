@@ -48,6 +48,38 @@ body {
   gap: 12px;
 }
 
+.mode-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 999px;
+  background: var(--surface-variant);
+  box-shadow: inset 0 0 0 1px rgba(89, 104, 242, 0.1);
+}
+
+.mode-switch__button {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-weight: 600;
+  font-size: 0.85rem;
+  border-radius: 999px;
+  padding: 6px 14px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.15s ease;
+}
+
+.mode-switch__button:hover {
+  transform: translateY(-1px);
+}
+
+.mode-switch__button--active {
+  background: var(--ekko-primary);
+  color: #ffffff;
+  box-shadow: 0 8px 14px rgba(89, 104, 242, 0.3);
+}
+
 .brand {
   display: flex;
   flex-direction: column;
@@ -241,6 +273,91 @@ body {
 .toggle-row label {
   font-weight: 500;
   color: var(--text-secondary);
+}
+
+.compose-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.compose-timer {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.compose-status {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.compose-status__error {
+  color: var(--error);
+}
+
+.compose-chip-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.compose-chip {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 8px 12px;
+  font-size: 0.8rem;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.compose-chip:hover {
+  background: rgba(89, 104, 242, 0.08);
+  color: var(--ekko-primary);
+}
+
+.compose-chip--active {
+  background: var(--ekko-primary);
+  border-color: var(--ekko-primary);
+  color: #ffffff;
+  box-shadow: 0 6px 14px rgba(89, 104, 242, 0.25);
+}
+
+.compose-output {
+  min-height: 160px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-variant);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.compose-output__placeholder {
+  color: var(--text-secondary);
+  font-style: italic;
+  margin: 0;
+}
+
+.compose-output__text {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 0.95rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.compose-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 
 .history-list {

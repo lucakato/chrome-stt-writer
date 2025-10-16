@@ -1,14 +1,28 @@
 import { readFile, writeFile } from 'fs/promises';
 import { resolve } from 'path';
 
-const PLACEHOLDER = '__REPLACE_WITH_REWRITER_ORIGIN_TRIAL_TOKEN__';
+const PLACEHOLDER_TO_ENV = new Map([
+  ['__REPLACE_WITH_REWRITER_ORIGIN_TRIAL_TOKEN__', 'REWRITER_TRIAL_TOKEN'],
+  ['__REPLACE_WITH_PROMPT_MULTIMODAL_TRIAL_TOKEN__', 'PROMPT_TRIAL_TOKEN']
+]);
+const ENV_KEYS = new Set(PLACEHOLDER_TO_ENV.values());
 const DIST_MANIFEST = resolve('dist', 'manifest.json');
 const ENV_PATH = resolve('.env');
 
-async function readEnvToken() {
-  const tokenFromEnv = process.env.ORIGIN_TRIAL_TOKEN;
-  if (tokenFromEnv) {
-    return tokenFromEnv.trim();
+async function readEnvValues() {
+  const tokens = new Map();
+
+  // Prefer process.env
+  for (const key of ENV_KEYS) {
+    const value = process.env[key];
+    if (value && value.trim()) {
+      tokens.set(key, value.trim());
+    }
+  }
+
+  const missingKeys = [...ENV_KEYS].filter((key) => !tokens.has(key));
+  if (!missingKeys.length) {
+    return tokens;
   }
 
   try {
@@ -20,8 +34,11 @@ async function readEnvToken() {
         continue;
       }
       const [key, ...rest] = trimmed.split('=');
-      if (key === 'ORIGIN_TRIAL_TOKEN') {
-        return rest.join('=').trim();
+      if (ENV_KEYS.has(key) && !tokens.has(key)) {
+        const value = rest.join('=').trim();
+        if (value) {
+          tokens.set(key, value);
+        }
       }
     }
   } catch (error) {
@@ -30,7 +47,7 @@ async function readEnvToken() {
     }
   }
 
-  return undefined;
+  return tokens;
 }
 
 async function patchManifest() {
@@ -43,14 +60,7 @@ async function patchManifest() {
     return;
   }
 
-  const token = await readEnvToken();
-
-  if (!token) {
-    console.warn(
-      '[postbuild] ORIGIN_TRIAL_TOKEN not set. Leaving manifest placeholder in place.'
-    );
-    return;
-  }
+  const tokens = await readEnvValues();
 
   let manifest;
   try {
@@ -62,14 +72,27 @@ async function patchManifest() {
   }
 
   const trialEntries = Array.isArray(manifest.origin_trials) ? manifest.origin_trials : [];
-  const patched = trialEntries.map((entry) => {
-    if (entry.trial === PLACEHOLDER) {
-      return { ...entry, trial: token };
-    }
-    return entry;
-  });
+  let replacements = 0;
 
-  const replacements = patched.filter((entry) => entry.trial === token).length;
+  const patched = trialEntries.map((entry) => {
+    if (!(entry && typeof entry === 'object')) {
+      return entry;
+    }
+
+    const envKey = PLACEHOLDER_TO_ENV.get(entry.trial);
+    if (!envKey) {
+      return entry;
+    }
+
+    const token = tokens.get(envKey);
+    if (!token) {
+      console.warn(`[postbuild] ${envKey} not set. Leaving placeholder ${entry.trial}.`);
+      return entry;
+    }
+
+    replacements += 1;
+    return { ...entry, trial: token };
+  });
 
   if (!replacements) {
     console.warn('[postbuild] No origin trial placeholder found in manifest. Skipping patch.');
@@ -78,7 +101,7 @@ async function patchManifest() {
 
   manifest.origin_trials = patched;
   await writeFile(DIST_MANIFEST, JSON.stringify(manifest, null, 2));
-  console.info('[postbuild] Injected origin trial token into dist/manifest.json.');
+  console.info('[postbuild] Injected origin trial tokens into dist/manifest.json.');
 }
 
 patchManifest().catch((error) => {

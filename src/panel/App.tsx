@@ -13,6 +13,14 @@ import {
   rewriteText,
   type RewriterAvailabilityStatus
 } from '@shared/ai/rewriter';
+import {
+  composeFromAudio,
+  createPromptSession,
+  getPromptAvailability,
+  type PromptAvailabilityStatus
+} from '@shared/ai/prompt';
+
+type Mode = 'transcribe' | 'compose';
 
 type RewritePreset =
   | 'concise-formal'
@@ -22,6 +30,8 @@ type RewritePreset =
   | 'action-items'
   | 'custom';
 
+type ComposePresetId = 'freeform' | 'email-formal' | 'summary' | 'action-plan';
+
 type HistoryEntry = {
   id: string;
   title: string;
@@ -29,16 +39,13 @@ type HistoryEntry = {
   actions: string[];
   summary?: string;
   rewrite?: string;
+  compose?: {
+    presetId: ComposePresetId;
+    presetLabel: string;
+    instructions?: string;
+    output: string;
+  };
 };
-
-const rewritePresets: Array<{ id: RewritePreset; label: string }> = [
-  { id: 'concise-formal', label: 'Concise • Formal' },
-  { id: 'expand', label: 'Expand' },
-  { id: 'casual', label: 'Casual' },
-  { id: 'bullet', label: 'Bullet list' },
-  { id: 'action-items', label: 'Action items' },
-  { id: 'custom', label: 'Custom instructions' }
-];
 
 type RewritePresetConfig = {
   sharedContext?: string;
@@ -49,6 +56,47 @@ type RewritePresetConfig = {
 };
 
 const BASE_SHARED_CONTEXT = 'Voice note rewrite to help organize research and meeting insights.';
+const COMPOSE_MAX_DURATION_MS = 15_000;
+
+const rewritePresets: Array<{ id: RewritePreset; label: string }> = [
+  { id: 'concise-formal', label: 'Concise • Formal' },
+  { id: 'expand', label: 'Expand' },
+  { id: 'casual', label: 'Casual' },
+  { id: 'bullet', label: 'Bullet list' },
+  { id: 'action-items', label: 'Action items' },
+  { id: 'custom', label: 'Custom instructions' }
+];
+
+const composePresets: Array<{ id: ComposePresetId; label: string; systemPrompt: string; helper: string }> = [
+  {
+    id: 'freeform',
+    label: 'Freeform',
+    helper: 'Great for open-ended questions or ideation.',
+    systemPrompt:
+      'You are Ekko, an on-device writing assistant. Listen carefully to the user’s speech and produce a clear, helpful response they can use as-is. Keep the writing polished and easy to read. Reply in the same language the user speaks when possible.'
+  },
+  {
+    id: 'email-formal',
+    label: 'Formal email',
+    helper: 'Draft polished outreach or apology emails.',
+    systemPrompt:
+      'You help users draft formal, polite emails. Listen to the user’s request and write a professional email that addresses their goal. If appropriate, include a subject line and sign-off.'
+  },
+  {
+    id: 'summary',
+    label: 'Summary',
+    helper: 'Turn thoughts into concise summaries.',
+    systemPrompt:
+      'You summarize the user’s spoken input into a concise digest. Identify key points, group related ideas, and deliver 2–3 short paragraphs or a bullet list capturing the essentials.'
+  },
+  {
+    id: 'action-plan',
+    label: 'Action plan',
+    helper: 'Outline next steps with clarity.',
+    systemPrompt:
+      'You produce a clear action plan based on the user’s spoken intent. Deliver numbered steps or bullet points that explain what to do next, including helpful tips or reminders.'
+  }
+];
 
 const rewritePresetConfig: Record<RewritePreset, RewritePresetConfig> = {
   'concise-formal': {
@@ -117,8 +165,20 @@ function formatPermission(status: ReturnType<typeof useMicrophonePermission>['st
   }
 }
 
+function formatDuration(ms: number) {
+  if (!Number.isFinite(ms) || ms < 0) {
+    return '0:00';
+  }
+  const totalSeconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
 export default function App() {
   const { status: micStatus, requestPermission, error: micError } = useMicrophonePermission();
+  const [mode, setMode] = useState<Mode>('transcribe');
+
   const [transcript, setTranscript] = useState('');
   const [rewritePreset, setRewritePreset] = useState<RewritePreset>('concise-formal');
   const [directInsertEnabled, setDirectInsertEnabled] = useState(false);
@@ -126,18 +186,35 @@ export default function App() {
   const [streamingSummary, setStreamingSummary] = useState<string | null>(null);
   const [language, setLanguage] = useState<string>(() => navigator.language ?? 'en-US');
   const [onboardingDismissed, setOnboardingDismissed] = useState(false);
+
   const [summarizerState, setSummarizerState] = useState<'idle' | 'checking' | SummarizerAvailabilityStatus | 'summarizing'>('idle');
   const [summarizerError, setSummarizerError] = useState<string | null>(null);
   const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
   const [summarizerMessage, setSummarizerMessage] = useState<string | null>(null);
+
   const [rewriterState, setRewriterState] = useState<'idle' | 'checking' | RewriterAvailabilityStatus | 'rewriting'>('idle');
   const [rewriterError, setRewriterError] = useState<string | null>(null);
   const [rewriterMessage, setRewriterMessage] = useState<string | null>(null);
   const [rewritePreview, setRewritePreview] = useState<string | null>(null);
 
-  const pendingSyncRef = useRef<number | null>(null);
-  const lastSyncedRef = useRef<string>('');
+  const [promptAvailabilityState, setPromptAvailabilityState] = useState<'idle' | 'checking' | PromptAvailabilityStatus>('idle');
+  const [promptAvailabilityMessage, setPromptAvailabilityMessage] = useState<string | null>(null);
+  const [composePreset, setComposePreset] = useState<ComposePresetId>('freeform');
+  const [composeInstruction, setComposeInstruction] = useState('');
+  const [composeState, setComposeState] = useState<'idle' | 'recording' | 'processing' | 'streaming'>('idle');
+  const [composeError, setComposeError] = useState<string | null>(null);
+  const [composeStreamValue, setComposeStreamValue] = useState('');
+  const [composeElapsedMs, setComposeElapsedMs] = useState(0);
   const activeSessionIdRef = useRef<string | null>(null);
+  const composeRecorderRef = useRef<MediaRecorder | null>(null);
+  const composeChunksRef = useRef<Blob[]>([]);
+  const composeTimerRef = useRef<number | null>(null);
+  const composeStartTimeRef = useRef<number | null>(null);
+  const composeAbortRef = useRef<AbortController | null>(null);
+  const composeStreamRef = useRef<MediaStream | null>(null);
+  const composeEntryIdRef = useRef<string | null>(null);
+  const composeSessionRef = useRef<LanguageModelSession | null>(null);
+  const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(null);
 
   const permissionMeta = useMemo(() => formatPermission(micStatus), [micStatus]);
   const isMicGranted = micStatus === 'granted';
@@ -238,6 +315,20 @@ export default function App() {
     [rewritePreset]
   );
 
+  const activeComposePreset = useMemo(
+    () => composePresets.find((preset) => preset.id === composePreset) ?? composePresets[0],
+    [composePreset]
+  );
+
+  const isPromptUnavailable =
+    promptAvailabilityState === 'unsupported' ||
+    promptAvailabilityState === 'unavailable' ||
+    promptAvailabilityState === 'error';
+
+  const composeOutput = composeStreamValue.trim();
+  const isComposeRecording = composeState === 'recording';
+  const isComposeBusy = composeState === 'processing' || composeState === 'streaming';
+
   const handleSummarize = useCallback(async () => {
     if (!activeTranscript) {
       return;
@@ -295,7 +386,8 @@ export default function App() {
           createdAt: existing?.createdAt ?? new Date().toLocaleTimeString(),
           actions,
           summary: result.summary,
-          rewrite: existing?.rewrite
+          rewrite: existing?.rewrite,
+          compose: existing?.compose
         };
 
         return [updatedEntry, ...entries.filter((entry) => entry.id !== entryId)];
@@ -314,25 +406,25 @@ export default function App() {
           if (response?.ok && response.data && typeof response.data === 'object') {
             const { id } = response.data as { id?: string };
             if (typeof id === 'string') {
-          const persistedId = id;
-          setHistory((entries) => {
-            const index = entries.findIndex((entry) => entry.id === entryId);
-            if (index === -1) {
-              return entries;
-            }
+              const persistedId = id;
+              setHistory((entries) => {
+                const index = entries.findIndex((entry) => entry.id === entryId);
+                if (index === -1) {
+                  return entries;
+                }
 
-            const existingEntry = entries[index];
-            const updatedEntry: HistoryEntry = {
-              ...existingEntry,
-              id: persistedId
-            };
+                const existingEntry = entries[index];
+                const updatedEntry: HistoryEntry = {
+                  ...existingEntry,
+                  id: persistedId
+                };
 
-            const next = [...entries];
-            next.splice(index, 1);
-            return [updatedEntry, ...next];
-          });
+                const next = [...entries];
+                next.splice(index, 1);
+                return [updatedEntry, ...next];
+              });
 
-          activeSessionIdRef.current = persistedId;
+              activeSessionIdRef.current = persistedId;
             }
           }
         })
@@ -412,7 +504,8 @@ export default function App() {
           createdAt: existing?.createdAt ?? new Date().toLocaleTimeString(),
           actions,
           summary: existing?.summary,
-          rewrite: result.content
+          rewrite: result.content,
+          compose: existing?.compose
         };
 
         return [updatedEntry, ...entries.filter((entry) => entry.id !== entryId)];
@@ -502,6 +595,346 @@ export default function App() {
       });
   }, []);
 
+  const ensurePromptSession = useCallback((): Promise<LanguageModelSession> => {
+    if (composeSessionRef.current) {
+      return Promise.resolve(composeSessionRef.current);
+    }
+
+    if (composeSessionPromiseRef.current) {
+      return composeSessionPromiseRef.current;
+    }
+
+    const promise = createPromptSession({
+      outputLanguage,
+      onStatusChange: (status) => {
+        setPromptAvailabilityState(status);
+        if (status === 'downloadable') {
+          setPromptAvailabilityMessage('Downloading the on-device model… keep this tab open while Chrome finishes.');
+        } else if (status === 'ready') {
+          setPromptAvailabilityMessage(null);
+        }
+      },
+      monitor: (monitor) => {
+        const handler = (event: Event) => {
+          const loaded = Math.min(
+            Math.max((event as { loaded?: number }).loaded ?? 0, 0),
+            1
+          );
+          setPromptAvailabilityState('downloadable');
+          setPromptAvailabilityMessage(
+            `Downloading the on-device model… ${Math.round(loaded * 100)}%`
+          );
+        };
+        monitor.addEventListener('downloadprogress', handler);
+      }
+    })
+      .then((session) => {
+        composeSessionRef.current = session;
+        composeSessionPromiseRef.current = null;
+        return session;
+      })
+      .catch((error) => {
+        composeSessionPromiseRef.current = null;
+        throw error;
+      });
+
+    composeSessionPromiseRef.current = promise;
+    return promise;
+  }, [outputLanguage]);
+
+  const runCompose = useCallback(
+    async (audioBuffer: ArrayBuffer) => {
+      const preset = activeComposePreset;
+      const instructions = composeInstruction.trim();
+
+      setComposeError(null);
+      setComposeState('streaming');
+      setComposeStreamValue('');
+
+      const abortController = new AbortController();
+      composeAbortRef.current = abortController;
+
+      try {
+        let session: LanguageModelSession | null = composeSessionRef.current;
+        if (!session) {
+          const availability = await getPromptAvailability({
+            expectedInputs: [{ type: 'audio', languages: [outputLanguage] }],
+            expectedOutputs: [{ type: 'text', languages: [outputLanguage] }]
+          });
+
+          setPromptAvailabilityState(availability.status);
+          setPromptAvailabilityMessage(availability.message ?? null);
+
+          if (availability.status === 'unsupported' || availability.status === 'unavailable' || availability.status === 'error') {
+            const message = availability.message ?? 'Prompt API is not ready yet on this device.';
+            setComposeError(message);
+            setComposeState('idle');
+            return;
+          }
+
+          session = await ensurePromptSession();
+        }
+
+        const text = await composeFromAudio({
+          audio: audioBuffer,
+          systemPrompt: preset.systemPrompt,
+          instruction: instructions || undefined,
+          outputLanguage,
+          onStatusChange: (status) => {
+            setPromptAvailabilityState(status);
+            if (status === 'downloadable') {
+              setPromptAvailabilityMessage('Downloading the on-device model… keep this tab open while Chrome finishes.');
+            } else if (status === 'ready') {
+              setPromptAvailabilityMessage(null);
+            }
+          },
+          onChunk: (chunk) => {
+            setComposeStreamValue(chunk);
+          },
+          signal: abortController.signal,
+          session
+        });
+
+        const finalText = text.trim();
+        setComposeStreamValue(finalText);
+        setComposeState('idle');
+        setComposeElapsedMs(0);
+        composeAbortRef.current = null;
+
+        const entryId = crypto.randomUUID();
+        composeEntryIdRef.current = entryId;
+        const createdAt = new Date().toLocaleTimeString();
+
+        setHistory((entries) => [
+          {
+            id: entryId,
+            title: finalText.slice(0, 60) || `${preset.label} draft`,
+            createdAt,
+            actions: ['Composed'],
+            compose: {
+              presetId: preset.id,
+              presetLabel: preset.label,
+              instructions: instructions || undefined,
+              output: finalText
+            }
+          },
+          ...entries
+        ]);
+
+        chrome.runtime
+          ?.sendMessage({
+            type: 'ekko/ai/compose',
+            payload: {
+              sessionId: undefined,
+              preset: preset.id,
+              instructions: instructions || undefined,
+              output: finalText
+            }
+          } satisfies EkkoMessage)
+          .then((response: EkkoResponse | undefined) => {
+            if (response?.ok && response.data && typeof response.data === 'object') {
+              const { id } = response.data as { id?: string };
+              if (typeof id === 'string') {
+                const persistedId = id;
+                setHistory((entries) => {
+                  const index = entries.findIndex((entry) => entry.id === entryId);
+                  if (index === -1) return entries;
+                  const next = [...entries];
+                  next[index] = { ...next[index], id: persistedId };
+                  return next;
+                });
+                composeEntryIdRef.current = persistedId;
+              }
+            }
+          })
+          .catch((error: unknown) => {
+            console.warn('Unable to persist compose draft', error);
+          });
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          setComposeError('Compose request cancelled.');
+        } else {
+          const message =
+            error instanceof Error ? error.message : 'Prompt API could not generate a response.';
+          setComposeError(message);
+          composeSessionRef.current?.destroy?.();
+          composeSessionRef.current?.close?.();
+          composeSessionRef.current = null;
+        }
+        setComposeState('idle');
+      } finally {
+        composeAbortRef.current = null;
+      }
+    },
+    [activeComposePreset, composeInstruction, ensurePromptSession, outputLanguage]
+  );
+
+  const handleStopComposeRecording = useCallback(
+    (auto = false) => {
+      if (composeState !== 'recording') {
+        return;
+      }
+      const recorder = composeRecorderRef.current;
+      if (!recorder) {
+        setComposeState('idle');
+        return;
+      }
+      if (composeTimerRef.current) {
+        window.clearInterval(composeTimerRef.current);
+        composeTimerRef.current = null;
+      }
+      composeStartTimeRef.current = null;
+      setComposeState('processing');
+      if (auto) {
+        setComposeError('Recording paused after 15 seconds to keep sessions responsive.');
+      }
+      try {
+        recorder.stop();
+      } catch (error) {
+        console.warn('Unable to stop compose recorder', error);
+        setComposeState('idle');
+      }
+    },
+    [composeState]
+  );
+
+  const handleStartComposeRecording = useCallback(async () => {
+    if (!isMicGranted) {
+      const granted = await requestPermission();
+      if (!granted) {
+        return;
+      }
+    }
+
+    if (composeState === 'recording') {
+      handleStopComposeRecording();
+      return;
+    }
+
+    if (isPromptUnavailable) {
+      setComposeError('Prompt API is unavailable on this device.');
+      return;
+    }
+
+    try {
+      setComposeError(null);
+      setComposeStreamValue('');
+      setComposeElapsedMs(0);
+      composeChunksRef.current = [];
+      composeEntryIdRef.current = null;
+
+      ensurePromptSession().catch((error) => {
+        const message =
+          error instanceof Error
+            ? error.message
+            : 'Prompt API could not initialize the on-device model yet.';
+        setComposeError(message);
+      });
+
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      composeStreamRef.current = stream;
+      const recorderOptions =
+        typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+          ? { mimeType: 'audio/webm;codecs=opus' }
+          : undefined;
+      const recorder = new MediaRecorder(stream, recorderOptions as MediaRecorderOptions | undefined);
+      composeRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          composeChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        if (composeTimerRef.current) {
+          window.clearInterval(composeTimerRef.current);
+          composeTimerRef.current = null;
+        }
+        composeStartTimeRef.current = null;
+        composeRecorderRef.current = null;
+        composeStreamRef.current?.getTracks().forEach((track) => track.stop());
+        composeStreamRef.current = null;
+
+        const chunks = composeChunksRef.current;
+        composeChunksRef.current = [];
+
+        if (!chunks.length) {
+          setComposeError('No audio captured. Try recording again.');
+          setComposeState('idle');
+          return;
+        }
+
+        try {
+          const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+          const buffer = await blob.arrayBuffer();
+          await runCompose(buffer);
+        } catch (processingError) {
+          const message =
+            processingError instanceof Error
+              ? processingError.message
+              : 'Unable to process recorded audio.';
+          setComposeError(message);
+          setComposeState('idle');
+        }
+      };
+
+      recorder.onerror = (event) => {
+        console.warn('MediaRecorder error', event);
+        setComposeError('Chrome could not capture audio. Try again.');
+        setComposeState('idle');
+      };
+
+      recorder.start();
+      composeStartTimeRef.current = Date.now();
+      setComposeState('recording');
+
+      composeTimerRef.current = window.setInterval(() => {
+        if (!composeStartTimeRef.current) {
+          return;
+        }
+        const elapsed = Date.now() - composeStartTimeRef.current;
+        setComposeElapsedMs(elapsed);
+        if (elapsed >= COMPOSE_MAX_DURATION_MS) {
+          handleStopComposeRecording(true);
+        }
+      }, 100);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Chrome could not access the microphone.';
+      setComposeError(message);
+      setComposeState('idle');
+    }
+  }, [composeState, ensurePromptSession, handleStopComposeRecording, isMicGranted, isPromptUnavailable, requestPermission, runCompose]);
+
+  const handleCancelCompose = useCallback(() => {
+    composeAbortRef.current?.abort();
+    composeAbortRef.current = null;
+    setComposeState('idle');
+    setComposeError('Compose request cancelled.');
+  }, []);
+
+  const handleCopyCompose = useCallback(async () => {
+    if (!composeOutput) return;
+    try {
+      await navigator.clipboard.writeText(composeOutput);
+    } catch (error) {
+      console.warn('Unable to copy compose output', error);
+    }
+  }, [composeOutput]);
+
+  const handleInsertCompose = useCallback(() => {
+    if (!composeOutput) return;
+    chrome.runtime
+      ?.sendMessage({
+        type: 'ekko/direct-insert/apply',
+        payload: { text: composeOutput }
+      } satisfies EkkoMessage)
+      .catch((error: unknown) => {
+        console.warn('Unable to insert compose draft into active field', error);
+      });
+  }, [composeOutput]);
+
   useEffect(() => {
     void (async () => {
       const onboarding = await readOnboardingState();
@@ -526,40 +959,12 @@ export default function App() {
         return;
       }
 
-      if (availability.status === 'error') {
-        const message = availability.message ?? 'Summarizer API error.';
-        setSummarizerState('error');
-        setSummarizerError(message);
+      setSummarizerState(availability.status);
+      if (availability.message) {
+        setSummarizerMessage(availability.message);
+      } else {
         setSummarizerMessage(null);
-        return;
       }
-
-      if (availability.status === 'unsupported') {
-        const message = availability.message ?? 'Summarizer API is not supported on this device.';
-        setSummarizerState('unsupported');
-        setSummarizerError(message);
-        setSummarizerMessage(null);
-        return;
-      }
-
-      if (availability.status === 'unavailable') {
-        const message = availability.message ?? 'Summarizer is currently unavailable.';
-        setSummarizerState('unavailable');
-        setSummarizerError(message);
-        setSummarizerMessage(null);
-        return;
-      }
-
-      if (availability.status === 'downloadable') {
-        setSummarizerState('idle');
-        setSummarizerError(null);
-        setSummarizerMessage('First summary may take a moment while the on-device model downloads.');
-        return;
-      }
-
-      setSummarizerState('ready');
-      setSummarizerError(null);
-      setSummarizerMessage(null);
     })();
 
     return () => {
@@ -573,44 +978,13 @@ export default function App() {
     void (async () => {
       setRewriterState('checking');
       const availability = await getRewriterAvailability();
-      if (cancelled) {
-        return;
-      }
-
-      if (availability.status === 'error') {
-        const message = availability.message ?? 'Rewriter API error.';
-        setRewriterState('error');
-        setRewriterError(message);
+      if (cancelled) return;
+      setRewriterState(availability.status);
+      if (availability.message) {
+        setRewriterMessage(availability.message);
+      } else {
         setRewriterMessage(null);
-        return;
       }
-
-      if (availability.status === 'unsupported') {
-        const message = availability.message ?? 'Rewriter API is not supported on this device.';
-        setRewriterState('unsupported');
-        setRewriterError(message);
-        setRewriterMessage(null);
-        return;
-      }
-
-      if (availability.status === 'unavailable') {
-        const message = availability.message ?? 'Rewriter is currently unavailable.';
-        setRewriterState('unavailable');
-        setRewriterError(message);
-        setRewriterMessage(null);
-        return;
-      }
-
-      if (availability.status === 'downloadable') {
-        setRewriterState('idle');
-        setRewriterError(null);
-        setRewriterMessage('First rewrite may take a moment while the on-device model downloads.');
-        return;
-      }
-
-      setRewriterState('ready');
-      setRewriterError(null);
-      setRewriterMessage(null);
     })();
 
     return () => {
@@ -619,208 +993,361 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (pendingSyncRef.current) {
-      window.clearTimeout(pendingSyncRef.current);
+    if (mode !== 'compose') {
+      return;
     }
 
-    const payloadTranscript = displayTranscript;
+    let cancelled = false;
+    setPromptAvailabilityState('checking');
+    setPromptAvailabilityMessage('Checking on-device Prompt API availability…');
 
-    pendingSyncRef.current = window.setTimeout(() => {
-      if (payloadTranscript === lastSyncedRef.current) {
-        return;
-      }
-
-      if (!payloadTranscript.trim()) {
-        activeSessionIdRef.current = null;
-      }
-
-      chrome.runtime
-        ?.sendMessage({
-          type: 'ekko/transcript/update',
-          payload: {
-            transcript: payloadTranscript,
-            origin: 'panel'
-          }
-        } satisfies EkkoMessage)
-        .then((response: EkkoResponse | undefined) => {
-          if (response?.ok && response.data && typeof response.data === 'object') {
-            const { id } = response.data as { id?: string };
-            if (typeof id === 'string') {
-              activeSessionIdRef.current = id;
-            }
-          }
-          lastSyncedRef.current = payloadTranscript;
-        })
-        .catch((error: unknown) => {
-          console.warn('Unable to sync transcript to background', error);
+    void (async () => {
+      try {
+        const availability = await getPromptAvailability({
+          expectedInputs: [{ type: 'audio', languages: [outputLanguage] }],
+          expectedOutputs: [{ type: 'text', languages: [outputLanguage] }]
         });
-    }, 150);
+        if (cancelled) {
+          return;
+        }
+        setPromptAvailabilityState(availability.status);
+        setPromptAvailabilityMessage(availability.message ?? null);
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+        setPromptAvailabilityState('error');
+        setPromptAvailabilityMessage(
+          error instanceof Error ? error.message : 'Prompt API availability check failed.'
+        );
+      }
+    })();
 
     return () => {
-      if (pendingSyncRef.current) {
-        window.clearTimeout(pendingSyncRef.current);
-        pendingSyncRef.current = null;
-      }
+      cancelled = true;
     };
-  }, [displayTranscript]);
+  }, [mode, outputLanguage]);
+
+  useEffect(() => {
+    if (mode === 'compose' && isRecording) {
+      stopRecording();
+    }
+  }, [mode, isRecording, stopRecording]);
+
+  useEffect(() => {
+    return () => {
+      if (composeTimerRef.current) {
+        window.clearInterval(composeTimerRef.current);
+      }
+      composeRecorderRef.current?.state === 'recording' && composeRecorderRef.current.stop();
+      composeStreamRef.current?.getTracks().forEach((track) => track.stop());
+      composeAbortRef.current?.abort();
+      composeSessionRef.current?.destroy?.();
+      composeSessionRef.current?.close?.();
+      composeSessionRef.current = null;
+      composeSessionPromiseRef.current = null;
+    };
+  }, []);
+
+  const handleTranscriptChange = useCallback(
+    (value: string) => {
+      setTranscript(value);
+      clearInterim();
+    },
+    [clearInterim]
+  );
 
   return (
-    <div className="app" role="application">
+    <div className="app">
       <header className="app__header">
-        <div className="brand">
+        <div className="brand" aria-live="polite">
           <span className="brand__title">Ekko: Write with Voice</span>
-          <span className="brand__subtitle">Live capture • On-device AI polish</span>
+          <span className="brand__subtitle">
+            Capture or compose with on-device AI.
+          </span>
+        </div>
+        <div className="mode-switch" role="tablist" aria-label="Ekko modes">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === 'transcribe'}
+            className={`mode-switch__button ${mode === 'transcribe' ? 'mode-switch__button--active' : ''}`}
+            onClick={() => setMode('transcribe')}
+          >
+            Transcribe
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === 'compose'}
+            className={`mode-switch__button ${mode === 'compose' ? 'mode-switch__button--active' : ''}`}
+            onClick={() => setMode('compose')}
+          >
+            Compose
+          </button>
         </div>
         <span className="pill">Chrome {chromeVersion}</span>
       </header>
 
-      <section className="panel-section" aria-labelledby="capture-section-title">
-        <div className="record-controls">
-          <div className="record-controls__main">
-            <button
-              type="button"
-              className="record-button"
-              onClick={handleToggleRecording}
-              disabled={micStatus === 'pending' || (!sttSupported && !isRecording)}
-            >
-              {isRecording ? 'Stop recording' : 'Start recording'}
-              <span
-                className={`status-chip ${isRecording ? 'status-chip--active' : ''}`}
-                aria-live="polite"
-              >
-                {isRecording ? 'Listening…' : 'Idle'}
-              </span>
-            </button>
-            <span
-              className={`status-chip ${permissionMeta.active ? 'status-chip--active' : ''}`}
-              aria-live="polite"
-            >
-              {permissionMeta.text}
-            </span>
-          </div>
-          {micStatus !== 'granted' && (
-            <button
-              type="button"
-              className="button button--outline record-controls__cta"
-              onClick={() => {
-                resetSttError();
-                void requestPermission();
-              }}
-            >
-              Allow microphone access
-            </button>
-          )}
-        </div>
-        <div className="record-controls__messages" aria-live="polite">
-          {micError && <p className="helper-text danger">{micError}</p>}
-          {!micError && micStatus === 'denied' && (
-            <p className="helper-text danger">
-              Microphone access is blocked. Click the lock icon next to the address bar, set Microphone to
-              "Allow", then try again.
-            </p>
-          )}
-          {!micError && micStatus === 'prompt' && (
-            <p className="helper-text">When Chrome prompts for access, choose Allow to start recording.</p>
-          )}
-          {micStatus === 'denied' && (
-            <button type="button" className="text-button" onClick={openMicrophoneSettings}>
-              Open Chrome microphone settings
-            </button>
-          )}
-          {sttError && <p className="helper-text danger">{sttError}</p>}
-          {!sttSupported && (
-            <p className="helper-text danger">
-              Live speech-to-text is not available in this browser. Try Chrome on desktop (138+) for Gemini Nano.
-            </p>
-          )}
-        </div>
-        {!onboardingDismissed && micStatus !== 'granted' && (
-          <div className="onboarding-card" role="note">
-            <h3 className="onboarding-card__title">First-time setup</h3>
-            <ol className="onboarding-card__list">
-              <li>Click the lock icon next to the address bar.</li>
-              <li>Set <strong>Microphone</strong> to <strong>Allow</strong>.</li>
-              <li>Return here and start recording.</li>
-            </ol>
-            <button
-              type="button"
-              className="button button--outline"
-              onClick={openMicrophoneSettings}
-            >
-              Open settings in a new tab
-            </button>
-          </div>
-        )}
-      </section>
+      {mode === 'transcribe' && (
+        <>
+          <section className="panel-section" aria-labelledby="capture-section-title">
+            <div className="record-controls">
+              <div className="record-controls__main">
+                <button
+                  type="button"
+                  className="record-button"
+                  onClick={handleToggleRecording}
+                  disabled={micStatus === 'pending' || (!sttSupported && !isRecording)}
+                >
+                  {isRecording ? 'Stop recording' : 'Start recording'}
+                  <span
+                    className={`status-chip ${isRecording ? 'status-chip--active' : ''}`}
+                    aria-live="polite"
+                  >
+                    {isRecording ? 'Listening…' : 'Idle'}
+                  </span>
+                </button>
+                <span
+                  className={`status-chip ${permissionMeta.active ? 'status-chip--active' : ''}`}
+                  aria-live="polite"
+                >
+                  {permissionMeta.text}
+                </span>
+              </div>
+              {micStatus !== 'granted' && (
+                <button
+                  type="button"
+                  className="button button--outline record-controls__cta"
+                  onClick={() => {
+                    resetSttError();
+                    void requestPermission();
+                  }}
+                >
+                  Allow microphone access
+                </button>
+              )}
+            </div>
+            <div className="record-controls__messages" aria-live="polite">
+              {micError && <p className="helper-text danger">{micError}</p>}
+              {!micError && micStatus === 'denied' && (
+                <p className="helper-text danger">
+                  Microphone access is blocked. Click the lock icon next to the address bar, set Microphone to
+                  "Allow", then try again.
+                </p>
+              )}
+              {!micError && micStatus === 'prompt' && (
+                <p className="helper-text">When Chrome prompts for access, choose Allow to start recording.</p>
+              )}
+              {micStatus === 'denied' && (
+                <button type="button" className="text-button" onClick={openMicrophoneSettings}>
+                  Open Chrome microphone settings
+                </button>
+              )}
+              {sttError && <p className="helper-text danger">{sttError}</p>}
+              {!sttSupported && (
+                <p className="helper-text danger">
+                  Live speech-to-text is not available in this browser. Try Chrome on desktop (138+) for Gemini Nano.
+                </p>
+              )}
+            </div>
+            {!onboardingDismissed && micStatus !== 'granted' && (
+              <div className="onboarding-card" role="note">
+                <h3 className="onboarding-card__title">First-time setup</h3>
+                <ol className="onboarding-card__list">
+                  <li>Click the lock icon next to the address bar.</li>
+                  <li>Set <strong>Microphone</strong> to <strong>Allow</strong>.</li>
+                  <li>Return here and start recording.</li>
+                </ol>
+                <button
+                  type="button"
+                  className="button button--outline"
+                  onClick={openMicrophoneSettings}
+                >
+                  Open settings in a new tab
+                </button>
+              </div>
+            )}
+          </section>
 
-      <section className="panel-section" aria-labelledby="transcript-title">
-        <h2 id="transcript-title" className="section-title">
-          Transcript
-        </h2>
-        <textarea
-          className="transcript-area"
-          value={displayTranscript}
-          placeholder="Start speaking to see your transcript…"
-          onChange={(event) => {
-            setTranscript(event.target.value);
-            clearInterim();
-          }}
-        />
-        <div className="actions-toolbar" role="toolbar" aria-label="AI Actions">
-          <button
-            type="button"
-            className="button button--primary"
-            disabled={!activeTranscript || isSummarizerBusy || summarizerUnavailable}
-            onClick={handleSummarize}
-          >
-            {isSummarizerBusy ? 'Summarizing…' : 'Summarize'}
-          </button>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <select
-              className="select"
-              value={rewritePreset}
-              onChange={(event) => setRewritePreset(event.target.value as RewritePreset)}
-            >
-              {rewritePresets.map((preset) => (
-                <option key={preset.id} value={preset.id}>
-                  {preset.label}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              className="button"
-              disabled={!activeTranscript || isRewriterBusy || rewriterUnavailable}
-              onClick={handleRewrite}
-            >
-              {isRewriterBusy ? 'Polishing…' : 'Polish'}
-            </button>
-          </div>
-          <button type="button" className="button" disabled={!activeTranscript} onClick={handleCopy}>
-            Copy
-          </button>
-        </div>
-        <div className="summary-status" aria-live="polite">
-          {summarizerMessage && <p className="helper-text">{summarizerMessage}</p>}
-          {summarizerError && <p className="helper-text danger">{summarizerError}</p>}
-        </div>
-        {streamingSummary && (
-          <div className="summary-preview">
-            <strong className="summary-preview__title">Summary Preview</strong>
-            <p className="summary-preview__body">{streamingSummary}</p>
-          </div>
-        )}
-        <div className="rewrite-status" aria-live="polite">
-          {rewriterMessage && <p className="helper-text">{rewriterMessage}</p>}
-          {rewriterError && <p className="helper-text danger">{rewriterError}</p>}
-        </div>
-        {rewritePreview && (
-          <div className="summary-preview rewrite-preview">
-            <strong className="summary-preview__title">Rewrite Preview • {rewritePresetLabel}</strong>
-            <p className="summary-preview__body">{rewritePreview}</p>
-          </div>
-        )}
-      </section>
+          <section className="panel-section" aria-labelledby="transcript-title">
+            <h2 id="transcript-title" className="section-title">
+              Transcript
+            </h2>
+            <textarea
+              className="transcript-area"
+              value={displayTranscript}
+              placeholder="Start speaking to see your transcript…"
+              onChange={(event) => handleTranscriptChange(event.target.value)}
+            />
+            <div className="actions-toolbar" role="toolbar" aria-label="AI Actions">
+              <button
+                type="button"
+                className="button button--primary"
+                disabled={!activeTranscript || isSummarizerBusy || summarizerUnavailable}
+                onClick={handleSummarize}
+              >
+                {isSummarizerBusy ? 'Summarizing…' : 'Summarize'}
+              </button>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <select
+                  className="select"
+                  value={rewritePreset}
+                  onChange={(event) => setRewritePreset(event.target.value as RewritePreset)}
+                >
+                  {rewritePresets.map((preset) => (
+                    <option key={preset.id} value={preset.id}>
+                      {preset.label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="button"
+                  disabled={!activeTranscript || isRewriterBusy || rewriterUnavailable}
+                  onClick={handleRewrite}
+                >
+                  {isRewriterBusy ? 'Polishing…' : 'Polish'}
+                </button>
+              </div>
+              <button type="button" className="button" disabled={!activeTranscript} onClick={handleCopy}>
+                Copy
+              </button>
+            </div>
+            <div className="summary-status" aria-live="polite">
+              {summarizerMessage && <p className="helper-text">{summarizerMessage}</p>}
+              {summarizerError && <p className="helper-text danger">{summarizerError}</p>}
+            </div>
+            {streamingSummary && (
+              <div className="summary-preview">
+                <strong className="summary-preview__title">Summary Preview</strong>
+                <p className="summary-preview__body">{streamingSummary}</p>
+              </div>
+            )}
+            <div className="rewrite-status" aria-live="polite">
+              {rewriterMessage && <p className="helper-text">{rewriterMessage}</p>}
+              {rewriterError && <p className="helper-text danger">{rewriterError}</p>}
+            </div>
+            {rewritePreview && (
+              <div className="summary-preview rewrite-preview">
+                <strong className="summary-preview__title">Rewrite Preview • {rewritePresetLabel}</strong>
+                <p className="summary-preview__body">{rewritePreview}</p>
+              </div>
+            )}
+          </section>
+        </>
+      )}
+
+      {mode === 'compose' && (
+        <>
+          <section className="panel-section" aria-labelledby="compose-controls-title">
+            <h2 id="compose-controls-title" className="section-title">
+              Compose with AI
+            </h2>
+            <p className="helper-text">
+              Speak naturally—Gemini Nano will listen and draft the content for you.
+            </p>
+            <div>
+              <p className="helper-text" style={{ marginBottom: '4px' }}>
+                Draft style
+              </p>
+              <div className="compose-chip-group" role="listbox" aria-label="Compose style">
+                {composePresets.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    role="option"
+                    aria-selected={composePreset === preset.id}
+                    className={`compose-chip ${composePreset === preset.id ? 'compose-chip--active' : ''}`}
+                    onClick={() => setComposePreset(preset.id)}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+              <p className="helper-text" style={{ marginTop: '4px' }}>
+                {activeComposePreset.helper}
+              </p>
+            </div>
+            <label htmlFor="compose-instruction" className="helper-text" style={{ fontWeight: 600 }}>
+              Optional typed context
+            </label>
+            <textarea
+              id="compose-instruction"
+              className="transcript-area"
+              style={{ minHeight: '80px' }}
+              placeholder="Add details Gemini should know (recipient, tone, bullet points)…"
+              value={composeInstruction}
+              onChange={(event) => setComposeInstruction(event.target.value)}
+            />
+            <div className="compose-controls">
+              <button
+                type="button"
+                className="record-button"
+                onClick={isComposeRecording ? () => handleStopComposeRecording(false) : handleStartComposeRecording}
+                disabled={
+                  isComposeBusy ||
+                  promptAvailabilityState === 'checking' ||
+                  promptAvailabilityState === 'unsupported' ||
+                  promptAvailabilityState === 'unavailable' ||
+                  promptAvailabilityState === 'error'
+                }
+              >
+                {isComposeRecording ? 'Stop capture' : 'Start capture'}
+                <span
+                  className={`status-chip ${isComposeRecording ? 'status-chip--active' : ''}`}
+                  aria-live="polite"
+                >
+                  {isComposeRecording ? 'Recording…' : composeState === 'streaming' ? 'Generating…' : 'Idle'}
+                </span>
+              </button>
+              {composeState === 'streaming' && (
+                <button type="button" className="button button--outline" onClick={handleCancelCompose}>
+                  Cancel
+                </button>
+              )}
+              <span className="compose-timer" aria-live="polite">
+                {formatDuration(composeElapsedMs)} / {formatDuration(COMPOSE_MAX_DURATION_MS)}
+              </span>
+            </div>
+            <div className="compose-status" aria-live="polite">
+              {promptAvailabilityState === 'downloadable' && (
+                <p className="helper-text">Chrome is downloading the on-device model. Keep this tab open.</p>
+              )}
+              {promptAvailabilityMessage && <p className="helper-text">{promptAvailabilityMessage}</p>}
+              {composeError && <p className="helper-text compose-status__error">{composeError}</p>}
+            </div>
+          </section>
+
+          <section className="panel-section" aria-labelledby="compose-output-title">
+            <h2 id="compose-output-title" className="section-title">
+              Draft Output
+            </h2>
+            <div className="compose-output">
+              {composeStreamValue ? (
+                <p className="compose-output__text">{composeStreamValue}</p>
+              ) : (
+                <p className="compose-output__placeholder">
+                  After you record, Gemini Nano will stream the generated response here.
+                </p>
+              )}
+            </div>
+            <div className="compose-actions" role="toolbar" aria-label="Compose actions">
+              <button type="button" className="button" disabled={!composeOutput} onClick={handleCopyCompose}>
+                Copy
+              </button>
+              <button
+                type="button"
+                className="button button--primary"
+                disabled={!composeOutput}
+                onClick={handleInsertCompose}
+              >
+                Insert into page
+              </button>
+            </div>
+          </section>
+        </>
+      )}
 
       <section className="panel-section" aria-labelledby="settings-title">
         <h2 id="settings-title" className="section-title">
@@ -862,7 +1389,7 @@ export default function App() {
         </h2>
         {history.length === 0 ? (
           <div className="empty-state">
-            Your sessions will appear here once you summarize or rewrite a transcript.
+            Your sessions will appear here once you summarize, polish, or compose.
           </div>
         ) : (
           <div className="history-list">
@@ -881,6 +1408,14 @@ export default function App() {
                   {entry.rewrite && (
                     <p className="history-item__summary">
                       <strong className="history-item__summary-label">Rewrite:</strong> {entry.rewrite}
+                    </p>
+                  )}
+                  {entry.compose && (
+                    <p className="history-item__summary">
+                      <strong className="history-item__summary-label">
+                        Compose ({entry.compose.presetLabel}):
+                      </strong>{' '}
+                      {entry.compose.output}
                     </p>
                   )}
                 </div>

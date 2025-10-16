@@ -128,6 +128,51 @@ async function handleRewriteUpdate(message: Extract<EkkoMessage, { type: 'ekko/a
   return session;
 }
 
+async function handleComposeUpdate(message: Extract<EkkoMessage, { type: 'ekko/ai/compose' }>) {
+  const sessions = await listSessions();
+  const target = message.payload.sessionId
+    ? sessions.find((entry) => entry.id === message.payload.sessionId)
+    : undefined;
+
+  const compositionEntry = {
+    id: crypto.randomUUID(),
+    preset: message.payload.preset,
+    instructions: message.payload.instructions,
+    content: message.payload.output,
+    createdAt: Date.now()
+  } as const;
+
+  const sessionId = message.payload.sessionId ?? crypto.randomUUID();
+  const compositions = target?.compositions
+    ? [compositionEntry, ...target.compositions]
+    : [compositionEntry];
+
+  const session = await upsertTranscript(message.payload.output, {
+    id: sessionId,
+    compositions,
+    summary: target?.summary,
+    rewrites: target?.rewrites,
+    actions: ['Composed'],
+    tag: message.payload.instructions ?? target?.tag
+  });
+
+  return session;
+}
+
+async function applyDirectInsertText(text: string) {
+  const tabId = await getActiveTabId();
+  if (tabId === undefined) {
+    throw new Error('No active tab for direct insert.');
+  }
+
+  await chrome.tabs.sendMessage(tabId, {
+    type: 'ekko/direct-insert/apply',
+    payload: { text }
+  } satisfies EkkoMessage).catch((error: unknown) => {
+    console.warn('Unable to apply direct insert text', error);
+  });
+}
+
 chrome.runtime.onInstalled.addListener(() => {
   if (chrome.sidePanel?.setOptions) {
     chrome.sidePanel.setOptions({
@@ -191,6 +236,16 @@ chrome.runtime.onMessage.addListener((message: EkkoMessage, _sender, sendRespons
         case 'ekko/ai/rewrite': {
           const session = await handleRewriteUpdate(message);
           sendResponse({ ok: true, data: session } satisfies EkkoResponse);
+          break;
+        }
+        case 'ekko/ai/compose': {
+          const session = await handleComposeUpdate(message);
+          sendResponse({ ok: true, data: session } satisfies EkkoResponse);
+          break;
+        }
+        case 'ekko/direct-insert/apply': {
+          await applyDirectInsertText(message.payload.text);
+          sendResponse({ ok: true } satisfies EkkoResponse);
           break;
         }
         default:

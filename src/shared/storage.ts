@@ -1,4 +1,4 @@
-export type TranscriptAction = 'Summarized' | 'Rewritten' | 'Captured';
+export type TranscriptAction = 'Summarized' | 'Rewritten' | 'Captured' | 'Composed';
 
 export type TranscriptSession = {
   id: string;
@@ -9,6 +9,13 @@ export type TranscriptSession = {
   rewrites?: Array<{
     id: string;
     preset: string;
+    content: string;
+    createdAt: number;
+  }>;
+  compositions?: Array<{
+    id: string;
+    preset: string;
+    instructions?: string;
     content: string;
     createdAt: number;
   }>;
@@ -142,6 +149,7 @@ export async function upsertTranscript(transcript: string, metadata: Partial<Tra
     transcript,
     summary: metadata.summary ?? existing?.summary,
     rewrites: metadata.rewrites ?? existing?.rewrites,
+    compositions: metadata.compositions ?? existing?.compositions,
     actions: dedupedActions,
     tag: metadata.tag ?? existing?.tag,
     sourceUrl: metadata.sourceUrl ?? existing?.sourceUrl

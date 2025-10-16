@@ -51,6 +51,10 @@
     {
       "trial": "__REPLACE_WITH_REWRITER_ORIGIN_TRIAL_TOKEN__",
       "features": ["ChromeAIRewriter", "ChromeAIWriter"]
+    },
+    {
+      "trial": "__REPLACE_WITH_PROMPT_MULTIMODAL_TRIAL_TOKEN__",
+      "features": ["AIPromptAPIMultimodalInput"]
     }
   ],
   "host_permissions": [

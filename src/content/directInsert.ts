@@ -55,20 +55,27 @@ function disableListeners() {
 }
 
 chrome.runtime.onMessage.addListener((message: EkkoMessage) => {
-  if (message.type === 'ekko/direct-insert/toggle') {
-    directInsertEnabled = message.payload.enabled;
-    if (directInsertEnabled) {
-      enableListeners();
-    } else {
-      disableListeners();
-    }
-  }
-
-  if (!directInsertEnabled) {
-    return;
-  }
-
-  if (message.type === 'ekko/transcript/update' && message.payload.origin === 'panel') {
-    applyTranscript(message.payload.transcript);
+  switch (message.type) {
+    case 'ekko/direct-insert/toggle':
+      directInsertEnabled = message.payload.enabled;
+      if (directInsertEnabled) {
+        enableListeners();
+      } else {
+        disableListeners();
+      }
+      break;
+    case 'ekko/direct-insert/apply':
+      applyTranscript(message.payload.text);
+      break;
+    case 'ekko/transcript/update':
+      if (!directInsertEnabled) {
+        return;
+      }
+      if (message.payload.origin === 'panel') {
+        applyTranscript(message.payload.transcript);
+      }
+      break;
+    default:
+      break;
   }
 });

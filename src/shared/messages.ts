@@ -28,6 +28,21 @@ export type EkkoMessage =
         transcript: string;
         rewrite: string;
       };
+    }
+  | {
+      type: 'ekko/ai/compose';
+      payload: {
+        sessionId?: string;
+        preset: string;
+        instructions?: string;
+        output: string;
+      };
+    }
+  | {
+      type: 'ekko/direct-insert/apply';
+      payload: {
+        text: string;
+      };
     };
 
 export type EkkoResponse =
