@@ -206,6 +206,7 @@ export default function App() {
   const [composeStreamValue, setComposeStreamValue] = useState('');
   const [composeElapsedMs, setComposeElapsedMs] = useState(0);
   const activeSessionIdRef = useRef<string | null>(null);
+  const lastDirectInsertValueRef = useRef<string>('');
   const composeRecorderRef = useRef<MediaRecorder | null>(null);
   const composeChunksRef = useRef<Blob[]>([]);
   const composeTimerRef = useRef<number | null>(null);
@@ -583,6 +584,9 @@ export default function App() {
         .catch((error: unknown) => {
           console.warn('Unable to toggle direct insert bridge', error);
         });
+      if (!enabled) {
+        lastDirectInsertValueRef.current = '';
+      }
     },
     []
   );
@@ -1033,6 +1037,69 @@ export default function App() {
       stopRecording();
     }
   }, [mode, isRecording, stopRecording]);
+
+  useEffect(() => {
+    if (!directInsertEnabled) {
+      return;
+    }
+
+    const text = displayTranscript;
+    if (text === lastDirectInsertValueRef.current) {
+      return;
+    }
+
+    let cancelled = false;
+    let retryTimer: number | null = null;
+
+    const attempt = () => {
+      if (cancelled || !directInsertEnabled) {
+        return;
+      }
+
+      chrome.runtime
+        ?.sendMessage({
+          type: 'ekko/transcript/update',
+          payload: {
+            transcript: text,
+            origin: 'panel'
+          }
+        } satisfies EkkoMessage)
+        .then((response: EkkoResponse | undefined) => {
+          if (cancelled || !directInsertEnabled) {
+            return;
+          }
+
+          const delivered = !!(
+            response?.ok &&
+            response.data &&
+            typeof response.data === 'object' &&
+            (response.data as { delivered?: boolean }).delivered
+          );
+
+          if (delivered) {
+            lastDirectInsertValueRef.current = text;
+          } else {
+            retryTimer = window.setTimeout(attempt, 200);
+          }
+        })
+        .catch((error: unknown) => {
+          console.warn('Unable to mirror transcript to page', error);
+          if (!cancelled && directInsertEnabled) {
+            retryTimer = window.setTimeout(attempt, 200);
+          }
+        });
+    };
+
+    const initialTimer = window.setTimeout(attempt, 100);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(initialTimer);
+      if (retryTimer !== null) {
+        window.clearTimeout(retryTimer);
+      }
+    };
+  }, [directInsertEnabled, displayTranscript]);
 
   useEffect(() => {
     return () => {

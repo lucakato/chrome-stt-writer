@@ -3,6 +3,7 @@ import { listSessions, upsertTranscript } from '@shared/storage';
 
 const DIRECT_INSERT_SCRIPT_ID = 'ekko-direct-insert-script';
 let directInsertEnabled = false;
+const directInsertFrameMap = new Map<number, number>();
 
 async function ensureSidePanelOpened() {
   if (!chrome.sidePanel?.open) {
@@ -36,13 +37,13 @@ async function toggleDirectInsert(enabled: boolean) {
         matches: ['<all_urls>'],
         js: ['content/directInsert.js'],
         runAt: 'document_idle',
-        allFrames: false,
+        allFrames: true,
         persistAcrossSessions: false
       }
     ]);
 
     await chrome.scripting.executeScript({
-      target: { tabId },
+      target: { tabId, allFrames: true },
       files: ['content/directInsert.js']
     }).catch(() => {
       /* Script may already be injected */
@@ -51,21 +52,42 @@ async function toggleDirectInsert(enabled: boolean) {
     await chrome.scripting.unregisterContentScripts({ ids: [DIRECT_INSERT_SCRIPT_ID] }).catch(() => {
       /* noop */
     });
+    directInsertFrameMap.delete(tabId);
   }
 
   directInsertEnabled = enabled;
 
-  await chrome.tabs.sendMessage(tabId, {
-    type: 'ekko/direct-insert/toggle',
-    payload: { enabled }
-  } satisfies EkkoMessage).catch(() => {
-    /* No listener yet; content script will pick up toggle on first transcript update. */
-  });
+  const broadcastToggle = async (frameId?: number) => {
+    const options = typeof frameId === 'number' ? { frameId } : undefined;
+    await chrome.tabs
+      .sendMessage(tabId, {
+        type: 'ekko/direct-insert/toggle',
+        payload: { enabled }
+      } satisfies EkkoMessage, options)
+      .catch(() => {
+        /* Frame may not have injected script yet; ignore */
+      });
+  };
+
+  await broadcastToggle();
+
+  if (chrome.webNavigation?.getAllFrames) {
+    try {
+      const frames = await chrome.webNavigation.getAllFrames({ tabId });
+      await Promise.all(
+        frames.map((frame) => broadcastToggle(frame.frameId))
+      );
+    } catch (error) {
+      console.warn('Unable to broadcast direct insert toggle to all frames', error);
+    }
+  }
 }
 
-async function handleTranscriptUpdate(message: Extract<EkkoMessage, { type: 'ekko/transcript/update' }>) {
+async function handleTranscriptUpdate(
+  message: Extract<EkkoMessage, { type: 'ekko/transcript/update' }>
+) {
   if (message.type !== 'ekko/transcript/update') {
-    return;
+    return { session: null, delivered: false };
   }
 
   const session = await upsertTranscript(message.payload.transcript, {
@@ -74,23 +96,40 @@ async function handleTranscriptUpdate(message: Extract<EkkoMessage, { type: 'ekk
   });
 
   if (!directInsertEnabled) {
-    return session;
+    return { session, delivered: false };
   }
 
   const tabId = await getActiveTabId();
   if (tabId === undefined) {
-    return session;
+    return { session, delivered: false };
   }
 
-  await chrome.tabs.sendMessage(tabId, {
+  const frameId = directInsertFrameMap.get(tabId);
+  const messageToSend = {
     type: 'ekko/transcript/update',
     payload: {
       transcript: session.transcript,
       origin: 'panel'
     }
-  } satisfies EkkoMessage);
+  } satisfies EkkoMessage;
 
-  return session;
+  const options = typeof frameId === 'number' ? { frameId } : undefined;
+
+  const send = async () => {
+    try {
+      const response = await chrome.tabs.sendMessage(tabId, messageToSend, options);
+      if (response && typeof response === 'object' && (response as { success?: boolean }).success) {
+        return true;
+      }
+    } catch {
+      /* Frame may not have the script yet */
+    }
+    return false;
+  };
+
+  const delivered = await send();
+
+  return { session, delivered };
 }
 
 async function handleSummarizeUpdate(message: Extract<EkkoMessage, { type: 'ekko/ai/summarize' }>) {
@@ -165,18 +204,25 @@ async function applyDirectInsertText(text: string) {
     throw new Error('No active tab for direct insert.');
   }
 
-  const sendApplyMessage = () =>
-    chrome.tabs.sendMessage(tabId, {
+  const sendApplyMessage = () => {
+    const message = {
       type: 'ekko/direct-insert/apply',
       payload: { text }
-    } satisfies EkkoMessage);
+    } satisfies EkkoMessage;
+
+    const frameId = directInsertFrameMap.get(tabId);
+    const options = typeof frameId === 'number' ? { frameId } : undefined;
+    return options
+      ? chrome.tabs.sendMessage(tabId, message, options)
+      : chrome.tabs.sendMessage(tabId, message);
+  };
 
   try {
     await sendApplyMessage();
   } catch (error) {
     try {
       await chrome.scripting.executeScript({
-        target: { tabId },
+        target: { tabId, allFrames: true },
         files: ['content/directInsert.js']
       });
       await sendApplyMessage();
@@ -228,12 +274,24 @@ chrome.commands.onCommand.addListener(async (command) => {
   }
 });
 
-chrome.runtime.onMessage.addListener((message: EkkoMessage, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message: EkkoMessage, sender, sendResponse) => {
   (async () => {
     try {
       switch (message.type) {
         case 'ekko/direct-insert/toggle':
           await toggleDirectInsert(message.payload.enabled);
+          sendResponse({ ok: true } satisfies EkkoResponse);
+          break;
+        case 'ekko/direct-insert/query':
+          sendResponse({
+            ok: true,
+            data: { enabled: directInsertEnabled }
+          } satisfies EkkoResponse);
+          break;
+        case 'ekko/direct-insert/focus':
+          if (sender.tab?.id !== undefined && typeof sender.frameId === 'number') {
+            directInsertFrameMap.set(sender.tab.id, sender.frameId);
+          }
           sendResponse({ ok: true } satisfies EkkoResponse);
           break;
         case 'ekko/transcript/update': {

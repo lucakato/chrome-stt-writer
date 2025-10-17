@@ -12,7 +12,8 @@
     "scripting",
     "sidePanel",
     "aiLanguageModel",
-    "tabs"
+    "tabs",
+    "webNavigation"
   ],
   "commands": {
     "_execute_action": {

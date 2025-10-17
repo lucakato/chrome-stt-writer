@@ -43,6 +43,14 @@ export type EkkoMessage =
       payload: {
         text: string;
       };
+    }
+  | {
+      type: 'ekko/direct-insert/focus';
+      payload?: Record<string, never>;
+    }
+  | {
+      type: 'ekko/direct-insert/query';
+      payload?: Record<string, never>;
     };
 
 export type EkkoResponse =
