@@ -215,14 +215,19 @@ if (window.top !== window.self) {
 
   async function composeWidgetAudio(audioBuffer: ArrayBuffer): Promise<string> {
     const instruction = settings.composePrompt.trim();
+    console.info('[Ekko] widget instruction:', instruction);
     const browserLang = typeof navigator !== 'undefined' ? navigator.language : 'en';
     const baseLang = browserLang?.split('-')[0]?.toLowerCase() ?? 'en';
     const supportedLanguages = ['en', 'es', 'ja'];
     const outputLanguage = supportedLanguages.includes(baseLang) ? baseLang : 'en';
     let lastChunk = '';
+    const systemPrompt = instruction
+      ? `${WIDGET_DEFAULT_COMPOSE_PROMPT}\n\nFollow these additional instructions exactly:\n${instruction}`
+      : WIDGET_DEFAULT_COMPOSE_PROMPT;
+
     const text = await composeFromAudio({
       audio: audioBuffer,
-      systemPrompt: WIDGET_DEFAULT_COMPOSE_PROMPT,
+      systemPrompt,
       instruction: instruction ? instruction : undefined,
       outputLanguage,
       onChunk: (chunk) => {

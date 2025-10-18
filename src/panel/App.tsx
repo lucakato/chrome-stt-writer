@@ -702,6 +702,10 @@ export default function App() {
     async (audioBuffer: ArrayBuffer) => {
       const preset = activeComposePreset;
       const instructions = composePrompt.trim();
+      console.info('[Ekko] side panel instruction:', instructions);
+      const systemPrompt = instructions
+        ? `${preset.systemPrompt}\n\nFollow these additional instructions exactly:\n${instructions}`
+        : preset.systemPrompt;
 
       setComposeError(null);
       setComposeState('streaming');
@@ -733,7 +737,7 @@ export default function App() {
 
         const text = await composeFromAudio({
           audio: audioBuffer,
-          systemPrompt: preset.systemPrompt,
+          systemPrompt,
           instruction: instructions || undefined,
           outputLanguage,
           onStatusChange: (status) => {
