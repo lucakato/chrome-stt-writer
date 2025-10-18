@@ -11,7 +11,7 @@ import {
 import { composeFromAudio } from '@shared/ai/prompt';
 
 const WIDGET_DEFAULT_COMPOSE_PROMPT =
-  'You are Ekko, an on-device assistant. Generate a helpful, well-structured response based on the recorded audio.';
+  'You are Ekko, an on-device assistant. Listen carefully and give a direct, helpful answer that the user can use immediately. Reply in the user’s language, stay concise, and do not add meta commentary or extra instructions.';
 
 type RecordingState = 'idle' | 'recording' | 'processing';
 
