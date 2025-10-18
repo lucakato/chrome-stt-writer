@@ -15,7 +15,7 @@ declare global {
     | string
     | {
         type: 'text' | 'audio' | 'image';
-        value: string | ArrayBuffer;
+        value: string | ArrayBuffer | Blob;
       };
 
   interface PromptMessage {

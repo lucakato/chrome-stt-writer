@@ -57,17 +57,9 @@ export type EkkoMessage =
       payload?: Record<string, never>;
     }
   | {
-      type: 'ekko/widget/compose';
+      type: 'ekko/widget/insert';
       payload: {
-        audio: ArrayBuffer;
-        prompt: string;
-      };
-    }
-  | {
-      type: 'ekko/widget/compose/regenerate';
-      payload: {
-        prompt: string;
-        audio: ArrayBuffer;
+        text: string;
       };
     };
 

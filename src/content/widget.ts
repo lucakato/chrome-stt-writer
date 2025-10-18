@@ -1,4 +1,4 @@
-import type { EkkoMessage } from '@shared/messages';
+import type { EkkoMessage, EkkoResponse } from '@shared/messages';
 import {
   getEkkoSettings,
   observeEkkoSettings,
@@ -8,6 +8,7 @@ import {
   type EkkoMode,
   type EkkoSettingsChange
 } from '@shared/settings';
+import { composeFromAudio } from '@shared/ai/prompt';
 
 const WIDGET_DEFAULT_COMPOSE_PROMPT =
   'You are Ekko, an on-device assistant. Generate a helpful, well-structured response based on the recorded audio.';
@@ -50,6 +51,7 @@ if (window.top !== window.self) {
   let statusLabel: HTMLSpanElement | null = null;
   let timerLabel: HTMLSpanElement | null = null;
   let modeButtons: { transcribe: HTMLButtonElement; compose: HTMLButtonElement } | null = null;
+  let directInsertEnabled = true;
 
   function ensureStyle() {
     if (document.getElementById('ekko-floating-widget-style')) return;
@@ -186,6 +188,110 @@ if (window.top !== window.self) {
     root = document.createElement('div');
     root.id = 'ekko-floating-widget-root';
     document.body.appendChild(root);
+  }
+
+  function setDirectInsertState(enabled: boolean) {
+    directInsertEnabled = !!enabled;
+  }
+
+  function handleDirectInsertToggleMessage(message: EkkoMessage) {
+    if (message.type === 'ekko/direct-insert/toggle') {
+      const enabled = !!(message.payload as { enabled?: boolean }).enabled;
+      setDirectInsertState(enabled);
+    }
+  }
+
+  async function queryDirectInsertState() {
+    try {
+      const response = (await chrome.runtime.sendMessage({ type: 'ekko/direct-insert/query' } satisfies EkkoMessage)) as EkkoResponse | undefined;
+      if (response && response.ok && response.data && typeof response.data === 'object') {
+        const enabled = !!(response.data as { enabled?: boolean }).enabled;
+        setDirectInsertState(enabled);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function composeWidgetAudio(audioBuffer: ArrayBuffer): Promise<string> {
+    const instruction = settings.composePrompt.trim();
+    const browserLang = typeof navigator !== 'undefined' ? navigator.language : 'en';
+    const baseLang = browserLang?.split('-')[0]?.toLowerCase() ?? 'en';
+    const supportedLanguages = ['en', 'es', 'ja'];
+    const outputLanguage = supportedLanguages.includes(baseLang) ? baseLang : 'en';
+    let lastChunk = '';
+    const text = await composeFromAudio({
+      audio: audioBuffer,
+      systemPrompt: WIDGET_DEFAULT_COMPOSE_PROMPT,
+      instruction: instruction ? instruction : undefined,
+      outputLanguage,
+      onChunk: (chunk) => {
+        lastChunk = chunk.trim();
+        if (lastChunk) {
+          setStatus(lastChunk);
+        }
+      }
+    });
+    return text.trim();
+  }
+
+  async function insertComposeText(text: string) {
+    const response = await chrome.runtime
+      .sendMessage({
+        type: 'ekko/widget/insert',
+        payload: { text }
+      } satisfies EkkoMessage)
+      .catch((error) => {
+        console.warn('Unable to insert compose output', error);
+        throw error;
+      });
+
+    if (response && typeof response === 'object' && 'ok' in response && !(response as { ok?: boolean }).ok) {
+      const message = typeof response === 'object' && response && 'error' in response ? (response as { error?: string }).error : null;
+      throw new Error(message || 'Unable to insert compose output.');
+    }
+  }
+
+  async function copyToClipboard(text: string): Promise<boolean> {
+    if (typeof navigator === 'undefined' || !navigator.clipboard) {
+      return false;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (error) {
+      console.warn('Unable to copy compose output to clipboard', error);
+      return false;
+    }
+  }
+
+  async function deliverComposeOutput(text: string): Promise<boolean> {
+    if (!text) {
+      setStatus('Compose returned no response.');
+      return false;
+    }
+
+    const body = `${text}`;
+
+    if (!directInsertEnabled) {
+      setStatus(body);
+      return true;
+    }
+
+    try {
+      await insertComposeText(text);
+      setStatus(body);
+      return true;
+    } catch (error) {
+      const copied = await copyToClipboard(text);
+      if (copied) {
+        setStatus(body);
+        return true;
+      }
+      const message = error instanceof Error ? error.message : 'Compose failed.';
+      setStatus(`${message}\n${body}`.trim());
+      return false;
+    }
   }
 
   function createTrigger() {
@@ -493,7 +599,33 @@ if (window.top !== window.self) {
   async function startCompose() {
     mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     mediaChunks = [];
-    mediaRecorder = new MediaRecorder(mediaStream);
+    let mimeType: string | undefined;
+    if (typeof MediaRecorder !== 'undefined') {
+      const candidates = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/ogg;codecs=opus',
+        'audio/ogg',
+        'audio/mp4;codecs=mp4a.40.2',
+        'audio/mp4',
+        'audio/wav'
+      ];
+      mimeType = candidates.find((candidate) => {
+        try {
+          return MediaRecorder.isTypeSupported(candidate);
+        } catch {
+          return false;
+        }
+      });
+    }
+
+    mediaRecorder = mimeType ? new MediaRecorder(mediaStream, { mimeType }) : new MediaRecorder(mediaStream);
+    mimeType = mediaRecorder.mimeType || mimeType;
+    try {
+      console.info('[Ekko] Widget compose recorder MIME', mimeType);
+    } catch {
+      /* ignore */
+    }
     hasComposeRecording = false;
 
     mediaRecorder.ondataavailable = (event) => {
@@ -514,23 +646,15 @@ if (window.top !== window.self) {
       setStatus('Generating…');
 
       try {
-        const blob = new Blob(mediaChunks, { type: mediaRecorder?.mimeType || 'audio/webm' });
+        const blobMime = mediaRecorder?.mimeType || mimeType || 'audio/webm';
+        const blob = new Blob(mediaChunks, { type: blobMime });
         const buffer = await blob.arrayBuffer();
         lastComposeAudio = buffer.slice(0);
-        const response = await chrome.runtime.sendMessage({
-          type: 'ekko/widget/compose',
-          payload: {
-            audio: buffer,
-            prompt: settings.composePrompt
-          }
-        } satisfies EkkoMessage);
-
-        if (response && response.ok) {
-          setStatus('Inserted compose output.');
+        setStatus('Generating…');
+        const text = await composeWidgetAudio(buffer);
+        const delivered = await deliverComposeOutput(text);
+        if (delivered) {
           hasComposeRecording = true;
-        } else {
-          const message = response && !response.ok ? response.error : 'Compose failed.';
-          setStatus(typeof message === 'string' ? message : 'Compose failed.');
         }
       } catch (error) {
         console.warn('Compose failed', error);
@@ -607,7 +731,7 @@ if (window.top !== window.self) {
     }
   }
 
-  function handleRegenerate() {
+  async function handleRegenerate() {
     if (settings.mode !== 'compose') {
       return;
     }
@@ -620,7 +744,7 @@ if (window.top !== window.self) {
       setStatus('Record again before regenerating.');
       return;
     }
-    const audio = lastComposeAudio.slice(0);
+    const audioBuffer = lastComposeAudio.slice(0);
     if (recorderState === 'processing') {
       return;
     }
@@ -628,27 +752,19 @@ if (window.top !== window.self) {
     updateMicUi();
     setStatus('Generating…');
 
-    chrome.runtime
-      .sendMessage({
-        type: 'ekko/widget/compose/regenerate',
-        payload: { prompt: settings.composePrompt, audio }
-      } satisfies EkkoMessage)
-      .then((response) => {
-        if (response && response.ok) {
-          setStatus('Inserted compose output.');
-        } else {
-          const message = response && !response.ok ? response.error : 'Compose failed.';
-          setStatus(typeof message === 'string' ? message : 'Compose failed.');
-        }
-      })
-      .catch((error) => {
-        console.warn('Compose regenerate failed', error);
-        setStatus(error instanceof Error ? error.message : 'Compose failed.');
-      })
-      .finally(() => {
-        recorderState = 'idle';
-        updateMicUi();
-      });
+    try {
+      const text = await composeWidgetAudio(audioBuffer);
+      const delivered = await deliverComposeOutput(text);
+      if (delivered) {
+        hasComposeRecording = true;
+      }
+    } catch (error) {
+      console.warn('Compose regenerate failed', error);
+      setStatus(error instanceof Error ? error.message : 'Compose failed.');
+    } finally {
+      recorderState = 'idle';
+      updateMicUi();
+    }
   }
 
   function applySettingsChange(value: EkkoSettings, changed?: EkkoSettingsChange) {
@@ -667,6 +783,11 @@ if (window.top !== window.self) {
   function bootstrap() {
     console.info('[Ekko] Floating widget bootstrap');
     ensureWidget();
+    void queryDirectInsertState();
+    chrome.runtime.onMessage.addListener((message: EkkoMessage) => {
+      handleDirectInsertToggleMessage(message);
+      return false;
+    });
     getEkkoSettings()
       .then((value) => {
         applySettingsChange(value);

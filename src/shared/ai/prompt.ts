@@ -25,7 +25,7 @@ export type PromptSessionOptions = {
 };
 
 export type ComposeFromAudioRequest = {
-  audio: ArrayBuffer;
+  audio: ArrayBuffer | Blob;
   systemPrompt: string;
   instruction?: string;
   expectedInputs?: LanguageModelModalityDescriptor[];

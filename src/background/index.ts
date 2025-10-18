@@ -1,22 +1,8 @@
 import { EkkoMessage, EkkoResponse } from '@shared/messages';
 import { listSessions, upsertTranscript } from '@shared/storage';
-import { composeFromAudio } from '@shared/ai/prompt';
-
 const DIRECT_INSERT_SCRIPT_ID = 'ekko-direct-insert-script';
 let directInsertEnabled = false;
 const directInsertFrameMap = new Map<number, number>();
-const WIDGET_DEFAULT_PROMPT =
-  'You are Ekko, an on-device assistant. Generate a helpful, well-structured response based on the recorded audio.';
-
-async function composeAudioForWidget(audio: ArrayBuffer, prompt: string): Promise<string> {
-  const systemPrompt = WIDGET_DEFAULT_PROMPT;
-  const text = await composeFromAudio({
-    audio,
-    systemPrompt,
-    instruction: prompt.trim()
-  });
-  return text.trim();
-}
 
 async function ensureSidePanelOpened() {
   if (!chrome.sidePanel?.open) {
@@ -305,39 +291,21 @@ chrome.runtime.onMessage.addListener((message: EkkoMessage, sender, sendResponse
           await ensureSidePanelOpened();
           sendResponse({ ok: true } satisfies EkkoResponse);
           break;
-        case 'ekko/widget/compose': {
+        case 'ekko/widget/insert': {
           const tabId = sender.tab?.id;
           if (tabId === undefined) {
-            sendResponse({ ok: false, error: 'No active tab found for compose request.' });
+            sendResponse({ ok: false, error: 'No active tab found for insert request.' });
             break;
           }
           try {
-            const text = await composeAudioForWidget(message.payload.audio, message.payload.prompt);
-            if (!text) {
-              throw new Error('No response from model.');
+            if (!message.payload || typeof message.payload !== 'object' || typeof (message.payload as { text?: string }).text !== 'string') {
+              throw new Error('Missing text payload.');
             }
+            const text = (message.payload as { text: string }).text;
             await applyDirectInsertText(text, tabId);
-            sendResponse({ ok: true, data: { text } } satisfies EkkoResponse);
+            sendResponse({ ok: true } satisfies EkkoResponse);
           } catch (error) {
-            const msg = error instanceof Error ? error.message : 'Compose failed.';
-            sendResponse({ ok: false, error: msg } satisfies EkkoResponse);
-          }
-          break;
-        }
-        case 'ekko/widget/compose/regenerate': {
-          const tabId = sender.tab?.id;
-          if (tabId === undefined) {
-            sendResponse({ ok: false, error: 'No active tab found for compose request.' });
-            break;
-          }
-          try {
-            const text = await composeAudioForWidget(message.payload.audio, message.payload.prompt);
-            if (!text) {
-              throw new Error('No response from model.');
-            }
-            await applyDirectInsertText(text, tabId);
-            sendResponse({ ok: true, data: { text } } satisfies EkkoResponse);
-          } catch (error) {
+            console.warn('Widget insert failed', error);
             const msg = error instanceof Error ? error.message : 'Compose failed.';
             sendResponse({ ok: false, error: msg } satisfies EkkoResponse);
           }
