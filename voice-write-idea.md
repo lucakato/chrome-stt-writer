@@ -25,6 +25,7 @@
 - Summaries via `chrome.ai.summarizer.summarize()` tailored to short-form note context.
 - Rewrites via `chrome.ai.rewriter.rewrite()` with preset prompt templates and optional custom instruction field.
 - Prompt API sessions (`LanguageModel.create`) with audio-enabled prompts for free-form requests; streams responses into a compose buffer with quick actions (insert, copy, retry, follow-up).
+- Floating Ekko widget injected via content script on every page (toggleable from settings) with quick-record controls, mode switch, prompt editor, and re-generate action.
 - Transcript editor with inline controls: highlight errors, quick voice command to insert punctuation, undo/redo.
 - Notes history panel with timestamp, active tab URL, applied actions (summarized, polished, composed).
 - Quick export: copy to clipboard, download Markdown/plain text, or auto-insert into active text field (if user permits).
@@ -55,9 +56,11 @@
 ## Speech Input Pipelines
 - **Transcribe mode (Web Speech API)**: Use Web Speech recognition for live text; detect microphone availability and handle permission prompts. Provide language selector (default browser locale, top supported languages), display confidence/alternatives, support auto-punctuation, manual corrections, and rolling 3-minute capture windows. When Direct Insert Mode is enabled, stream deltas into the focused field while the side panel maintains the canonical transcript.
 - **Compose mode (Prompt API)**: Record short utterances (default 10–15 seconds) via `MediaRecorder`, surface countdown/progress UI, and immediately convert chunks to `ArrayBuffer` for Prompt API sessions. Prepend system instructions that explain the task (draft email, brainstorm ideas) and append follow-up prompts for iterative refinement. Offer quick re-record if the utterance is unclear, and allow adding typed clarifications before resubmitting to the session.
+- **Floating widget compose loop**: Reuse the latest transcript and compose prompt in the popup, and when “Re-generate” is pressed, append an assistant prefix with `prefix: true` so Gemini continues the previous output using the updated hint (“Not what you want? Assist the AI.”).
 
 ## UI & UX
 - Side panel React app (TypeScript) for persistent workspace.
+- Floating Ekko icon in-page (bottom-right by default, dismissible from settings) opens a compact popup with mic control, mode toggle (syncs with side panel), prompt textbox (compose only), settings launcher, and re-generate button.
 - Layout: mode switcher (Transcribe vs Compose) anchored above the editor, with context-specific controls underneath (live transcript editor vs compose response viewer), shared AI actions toolbar (Summarize, Polish with dropdown, Copy/Insert), history drawer (bottom/right).
 - Visual states for recording (waveform animation for Web Speech, radial countdown for Prompt capture), processing (spinner/stream indicator), success, and errors.
 - Mode-specific helper text: Transcribe highlights “Verbatim capture” while Compose says “Gemini drafts for you.” Include inline chips for frequent Compose intents (Email, Summary, Action plan) that adjust the system prompt.
@@ -75,7 +78,7 @@
 - Manifest V3 extension with:
   - Background service worker managing storage utilities, keyboard shortcuts, and fallback logic.
   - Side panel React app as primary UI.
-  - Minimal action popup to open side panel or show quick status (optional).
+  - Content-script overlay that renders the floating Ekko widget inside each frame.
 - Modules: speech controller, transcription store, Prompt session manager (LanguageModel lifecycle, prompt templates), AI orchestration service, history manager, settings manager.
 - Permissions: `sidePanel`, `storage`, optional `commands`, and `scripting`/`activeTab` to enable the direct-insert bridge safely.
 - Manifest: configure `origin_trials` with the Rewriter token and the Prompt API multimodal token; guard usage paths to degrade gracefully once a trial window closes or audio input is unsupported.
@@ -87,14 +90,15 @@
 3. Add Prompt API compose flow: request multimodal origin trial token, implement MediaRecorder capture, session management, streaming UI, and follow-up prompts.
 4. Integrate Summarizer API (Chrome 138+): implement availability checks, trigger model download, and wire streaming summaries.
 5. Secure Rewriter origin trial token for the extension ID, inject via `origin_trials`, then integrate rewrite presets with error handling.
-6. Implement history management, tagging, and export options (including composed outputs).
-7. Polish UX: keyboard shortcuts, onboarding, accessibility, and Ekko theming anchored in `#5968F2`/`#AEB6FF`.
-8. Testing, performance tuning, and packaging.
+6. Implement floating widget content script with mic controls, prompt editor, and direct insert coordination.
+7. Implement history management, tagging, and export options (including composed outputs).
+8. Polish UX: keyboard shortcuts, onboarding, accessibility, floating widget styling, and Ekko theming anchored in `#5968F2`/`#AEB6FF`.
+9. Testing, performance tuning, and packaging.
 
 ## Testing & Validation
 - Unit tests for storage, AI wrapper utilities, transcription state machine (mock Web Speech), and Prompt session manager (mock LanguageModel interactions).
 - Integration tests with Puppeteer + Chrome for record → summarize → rewrite and compose → insert flows, including fallbacks when Prompt API audio unavailable.
-- Manual QA matrix: microphone permissions, unsupported languages, AI APIs disabled, long dictations, rapid toggling between modes/actions, repeated compose follow-ups, session persistence after browser restart.
+- Manual QA matrix: microphone permissions, unsupported languages, AI APIs disabled, long dictations, rapid toggling between modes/actions, repeated compose follow-ups, session persistence after browser restart, floating widget interactions across iframes/privileged pages.
 - Performance: ensure transcription updates don’t lag; debounce calls to AI APIs to avoid race conditions; monitor Prompt streaming UI for backpressure when audio clips are large.
 
 ## Open Questions

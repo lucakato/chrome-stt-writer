@@ -51,6 +51,24 @@ export type EkkoMessage =
   | {
       type: 'ekko/direct-insert/query';
       payload?: Record<string, never>;
+    }
+  | {
+      type: 'ekko/sidepanel/open';
+      payload?: Record<string, never>;
+    }
+  | {
+      type: 'ekko/widget/compose';
+      payload: {
+        audio: ArrayBuffer;
+        prompt: string;
+      };
+    }
+  | {
+      type: 'ekko/widget/compose/regenerate';
+      payload: {
+        prompt: string;
+        audio: ArrayBuffer;
+      };
     };
 
 export type EkkoResponse =

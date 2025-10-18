@@ -19,6 +19,14 @@ import {
   getPromptAvailability,
   type PromptAvailabilityStatus
 } from '@shared/ai/prompt';
+import {
+  DEFAULT_SETTINGS,
+  getEkkoSettings,
+  observeEkkoSettings,
+  setEkkoSettings,
+  type EkkoMode,
+  type EkkoSettings
+} from '@shared/settings';
 
 type Mode = 'transcribe' | 'compose';
 
@@ -177,7 +185,8 @@ function formatDuration(ms: number) {
 
 export default function App() {
   const { status: micStatus, requestPermission, error: micError } = useMicrophonePermission();
-  const [mode, setMode] = useState<Mode>('transcribe');
+  const [settings, setSettings] = useState<EkkoSettings>(DEFAULT_SETTINGS);
+  const [settingsReady, setSettingsReady] = useState(false);
 
   const [transcript, setTranscript] = useState('');
   const [rewritePreset, setRewritePreset] = useState<RewritePreset>('concise-formal');
@@ -200,7 +209,6 @@ export default function App() {
   const [promptAvailabilityState, setPromptAvailabilityState] = useState<'idle' | 'checking' | PromptAvailabilityStatus>('idle');
   const [promptAvailabilityMessage, setPromptAvailabilityMessage] = useState<string | null>(null);
   const [composePreset, setComposePreset] = useState<ComposePresetId>('freeform');
-  const [composeInstruction, setComposeInstruction] = useState('');
   const [composeState, setComposeState] = useState<'idle' | 'recording' | 'processing' | 'streaming'>('idle');
   const [composeError, setComposeError] = useState<string | null>(null);
   const [composeStreamValue, setComposeStreamValue] = useState('');
@@ -216,6 +224,50 @@ export default function App() {
   const composeEntryIdRef = useRef<string | null>(null);
   const composeSessionRef = useRef<LanguageModelSession | null>(null);
   const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(null);
+
+  useEffect(() => {
+    let active = true;
+
+    getEkkoSettings()
+      .then((value) => {
+        if (!active) return;
+        setSettings(value);
+        setSettingsReady(true);
+      })
+      .catch((error) => {
+        console.warn('Unable to load Ekko settings', error);
+      });
+
+    const dispose = observeEkkoSettings((value, changed) => {
+      setSettings((prev) => ({
+        floatingWidgetEnabled: changed.floatingWidgetEnabled ? value.floatingWidgetEnabled : prev.floatingWidgetEnabled,
+        mode: changed.mode ? value.mode : prev.mode,
+        composePrompt: changed.composePrompt ? value.composePrompt : prev.composePrompt
+      }));
+      setSettingsReady(true);
+    });
+
+    return () => {
+      active = false;
+      dispose();
+    };
+  }, []);
+
+  const applySettings = useCallback((partial: Partial<EkkoSettings>) => {
+    setSettings((prev) => {
+      const optimistic = { ...prev, ...partial };
+      setEkkoSettings(partial).catch((error) => {
+        console.warn('Unable to update Ekko settings', error);
+        setSettings(prev);
+      });
+      return optimistic;
+    });
+  }, []);
+
+  const mode = settings.mode;
+  const composePrompt = settings.composePrompt;
+  const floatingWidgetEnabled = settings.floatingWidgetEnabled;
+  const composePromptDebounceRef = useRef<number | null>(null);
 
   const permissionMeta = useMemo(() => formatPermission(micStatus), [micStatus]);
   const isMicGranted = micStatus === 'granted';
@@ -649,7 +701,7 @@ export default function App() {
   const runCompose = useCallback(
     async (audioBuffer: ArrayBuffer) => {
       const preset = activeComposePreset;
-      const instructions = composeInstruction.trim();
+      const instructions = composePrompt.trim();
 
       setComposeError(null);
       setComposeState('streaming');
@@ -770,7 +822,7 @@ export default function App() {
         composeAbortRef.current = null;
       }
     },
-    [activeComposePreset, composeInstruction, ensurePromptSession, outputLanguage]
+    [activeComposePreset, composePrompt, ensurePromptSession, outputLanguage]
   );
 
   const handleStopComposeRecording = useCallback(
@@ -1139,7 +1191,7 @@ export default function App() {
             role="tab"
             aria-selected={mode === 'transcribe'}
             className={`mode-switch__button ${mode === 'transcribe' ? 'mode-switch__button--active' : ''}`}
-            onClick={() => setMode('transcribe')}
+            onClick={() => applySettings({ mode: 'transcribe' })}
           >
             Transcribe
           </button>
@@ -1148,7 +1200,7 @@ export default function App() {
             role="tab"
             aria-selected={mode === 'compose'}
             className={`mode-switch__button ${mode === 'compose' ? 'mode-switch__button--active' : ''}`}
-            onClick={() => setMode('compose')}
+            onClick={() => applySettings({ mode: 'compose' })}
           >
             Compose
           </button>
@@ -1344,8 +1396,24 @@ export default function App() {
               className="transcript-area"
               style={{ minHeight: '80px' }}
               placeholder="Add details Gemini should know (recipient, tone, bullet points)…"
-              value={composeInstruction}
-              onChange={(event) => setComposeInstruction(event.target.value)}
+              value={composePrompt}
+              onChange={(event) => {
+                const value = event.target.value;
+                setSettings((prev) => ({ ...prev, composePrompt: value }));
+                if (composePromptDebounceRef.current) {
+                  window.clearTimeout(composePromptDebounceRef.current);
+                }
+                composePromptDebounceRef.current = window.setTimeout(() => {
+                  applySettings({ composePrompt: value });
+                }, 400);
+              }}
+              onBlur={() => {
+                if (composePromptDebounceRef.current) {
+                  window.clearTimeout(composePromptDebounceRef.current);
+                  composePromptDebounceRef.current = null;
+                }
+                applySettings({ composePrompt });
+              }}
             />
             <div className="compose-controls">
               <button
@@ -1434,6 +1502,15 @@ export default function App() {
               </option>
             ))}
           </select>
+        </div>
+        <div className="toggle-row">
+          <label htmlFor="floating-widget-toggle">Show floating widget</label>
+          <input
+            id="floating-widget-toggle"
+            type="checkbox"
+            checked={floatingWidgetEnabled}
+            onChange={(event) => applySettings({ floatingWidgetEnabled: event.target.checked })}
+          />
         </div>
         <div className="toggle-row">
           <label htmlFor="direct-insert-toggle">Direct Insert Mode</label>

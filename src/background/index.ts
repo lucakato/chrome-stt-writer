@@ -1,9 +1,22 @@
 import { EkkoMessage, EkkoResponse } from '@shared/messages';
 import { listSessions, upsertTranscript } from '@shared/storage';
+import { composeFromAudio } from '@shared/ai/prompt';
 
 const DIRECT_INSERT_SCRIPT_ID = 'ekko-direct-insert-script';
 let directInsertEnabled = false;
 const directInsertFrameMap = new Map<number, number>();
+const WIDGET_DEFAULT_PROMPT =
+  'You are Ekko, an on-device assistant. Generate a helpful, well-structured response based on the recorded audio.';
+
+async function composeAudioForWidget(audio: ArrayBuffer, prompt: string): Promise<string> {
+  const systemPrompt = WIDGET_DEFAULT_PROMPT;
+  const text = await composeFromAudio({
+    audio,
+    systemPrompt,
+    instruction: prompt.trim()
+  });
+  return text.trim();
+}
 
 async function ensureSidePanelOpened() {
   if (!chrome.sidePanel?.open) {
@@ -198,8 +211,8 @@ async function handleComposeUpdate(message: Extract<EkkoMessage, { type: 'ekko/a
   return session;
 }
 
-async function applyDirectInsertText(text: string) {
-  const tabId = await getActiveTabId();
+async function applyDirectInsertText(text: string, tabIdOverride?: number) {
+  const tabId = tabIdOverride ?? (await getActiveTabId());
   if (tabId === undefined) {
     throw new Error('No active tab for direct insert.');
   }
@@ -288,6 +301,48 @@ chrome.runtime.onMessage.addListener((message: EkkoMessage, sender, sendResponse
             data: { enabled: directInsertEnabled }
           } satisfies EkkoResponse);
           break;
+        case 'ekko/sidepanel/open':
+          await ensureSidePanelOpened();
+          sendResponse({ ok: true } satisfies EkkoResponse);
+          break;
+        case 'ekko/widget/compose': {
+          const tabId = sender.tab?.id;
+          if (tabId === undefined) {
+            sendResponse({ ok: false, error: 'No active tab found for compose request.' });
+            break;
+          }
+          try {
+            const text = await composeAudioForWidget(message.payload.audio, message.payload.prompt);
+            if (!text) {
+              throw new Error('No response from model.');
+            }
+            await applyDirectInsertText(text, tabId);
+            sendResponse({ ok: true, data: { text } } satisfies EkkoResponse);
+          } catch (error) {
+            const msg = error instanceof Error ? error.message : 'Compose failed.';
+            sendResponse({ ok: false, error: msg } satisfies EkkoResponse);
+          }
+          break;
+        }
+        case 'ekko/widget/compose/regenerate': {
+          const tabId = sender.tab?.id;
+          if (tabId === undefined) {
+            sendResponse({ ok: false, error: 'No active tab found for compose request.' });
+            break;
+          }
+          try {
+            const text = await composeAudioForWidget(message.payload.audio, message.payload.prompt);
+            if (!text) {
+              throw new Error('No response from model.');
+            }
+            await applyDirectInsertText(text, tabId);
+            sendResponse({ ok: true, data: { text } } satisfies EkkoResponse);
+          } catch (error) {
+            const msg = error instanceof Error ? error.message : 'Compose failed.';
+            sendResponse({ ok: false, error: msg } satisfies EkkoResponse);
+          }
+          break;
+        }
         case 'ekko/direct-insert/focus':
           if (sender.tab?.id !== undefined && typeof sender.frameId === 'number') {
             directInsertFrameMap.set(sender.tab.id, sender.frameId);

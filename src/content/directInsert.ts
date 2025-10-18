@@ -14,6 +14,29 @@ if (window.__ekkoDirectInsertInjected__) {
   let directInsertEnabled = false;
   let lastEditable: HTMLElement | null = null;
 
+  let runtimeHealthy = true;
+
+  function isRuntimeAvailable(): boolean {
+    return runtimeHealthy && typeof chrome !== 'undefined' && !!chrome.runtime?.id;
+  }
+
+  function safeSendMessage(message: EkkoMessage) {
+    if (!isRuntimeAvailable()) {
+      return undefined;
+    }
+    try {
+      return chrome.runtime.sendMessage(message);
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('Extension context invalidated')) {
+        runtimeHealthy = false;
+        disableListeners();
+        window.__ekkoDirectInsertInjected__ = false;
+      }
+      console.warn('[Ekko] Unable to send runtime message after reload', error);
+      return undefined;
+    }
+  }
+
   function isEditableElement(element: EventTarget | null): element is HTMLElement {
     if (!element || !(element instanceof HTMLElement)) {
       return false;
@@ -35,13 +58,16 @@ if (window.__ekkoDirectInsertInjected__) {
   function handleFocus(event: FocusEvent) {
     const target = event.target;
 
-    if (isEditableElement(target)) {
-      lastEditable = target;
-      chrome.runtime
-        .sendMessage({ type: 'ekko/direct-insert/focus' } satisfies EkkoMessage)
-        .catch(() => {
-          /* ignore */
-        });
+    if (!isEditableElement(target)) {
+      return;
+    }
+
+    lastEditable = target;
+    const pending = safeSendMessage({ type: 'ekko/direct-insert/focus' } satisfies EkkoMessage);
+    if (pending && typeof (pending as Promise<unknown>).catch === 'function') {
+      (pending as Promise<unknown>).catch(() => {
+        /* ignore */
+      });
     }
   }
 
@@ -212,19 +238,21 @@ if (window.__ekkoDirectInsertInjected__) {
     return undefined;
   });
 
-  chrome.runtime
-    .sendMessage({ type: 'ekko/direct-insert/query' } satisfies EkkoMessage)
-    .then((response: EkkoResponse | undefined) => {
-      if (!response || !response.ok || !response.data || typeof response.data !== 'object') {
-        return;
-      }
-      const enabled = !!(response.data as { enabled?: boolean }).enabled;
-      directInsertEnabled = enabled;
-      if (directInsertEnabled) {
-        enableListeners();
-      }
-    })
-    .catch(() => {
-      /* ignore */
-    });
+  const bootstrap = safeSendMessage({ type: 'ekko/direct-insert/query' } satisfies EkkoMessage);
+  if (bootstrap && typeof (bootstrap as Promise<unknown>).then === 'function') {
+    (bootstrap as Promise<EkkoResponse | undefined>)
+      .then((response) => {
+        if (!response || !response.ok || !response.data || typeof response.data !== 'object') {
+          return;
+        }
+        const enabled = !!(response.data as { enabled?: boolean }).enabled;
+        directInsertEnabled = enabled;
+        if (directInsertEnabled) {
+          enableListeners();
+        }
+      })
+      .catch(() => {
+        /* ignore */
+      });
+  }
 }
