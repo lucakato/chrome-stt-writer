@@ -1,3 +1,9 @@
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import type { IconType } from 'react-icons';
+import { MdKeyboardVoice } from 'react-icons/md';
+import { RiVoiceprintFill } from 'react-icons/ri';
+import { IoSettingsSharp } from 'react-icons/io5';
 import type { EkkoMessage, EkkoResponse } from '@shared/messages';
 import {
   getEkkoSettings,
@@ -12,6 +18,21 @@ import { composeFromAudio } from '@shared/ai/prompt';
 
 const WIDGET_DEFAULT_COMPOSE_PROMPT =
   'You are Ekko, an on-device assistant. Listen carefully and give a direct, helpful answer that the user can use immediately. Reply in the user’s language, stay concise, and do not add meta commentary or extra instructions.';
+
+function iconMarkup(icon: IconType): string {
+  return renderToStaticMarkup(
+    createElement(icon, {
+      'aria-hidden': true,
+      focusable: 'false',
+      size: 18
+    })
+  );
+}
+
+const ICON_MIC_IDLE = iconMarkup(MdKeyboardVoice);
+const ICON_MIC_RECORDING = iconMarkup(RiVoiceprintFill);
+const ICON_SETTINGS = iconMarkup(IoSettingsSharp);
+const ICON_MIC_PROCESSING = '<span aria-hidden="true">⏳</span>';
 
 type RecordingState = 'idle' | 'recording' | 'processing';
 
@@ -384,14 +405,14 @@ if (window.top !== window.self) {
     micButton.className = 'ekko-icon-button';
     micButton.type = 'button';
     micButton.title = 'Start recording';
-    micButton.innerHTML = '<span aria-hidden="true">🎙️</span>';
+    micButton.innerHTML = ICON_MIC_IDLE;
     micButton.addEventListener('click', handleMicClick);
 
     settingsButton = document.createElement('button');
     settingsButton.className = 'ekko-icon-button';
     settingsButton.type = 'button';
     settingsButton.title = 'Open settings';
-    settingsButton.innerHTML = '<span aria-hidden="true">⚙️</span>';
+    settingsButton.innerHTML = ICON_SETTINGS;
     settingsButton.addEventListener('click', () => {
       chrome.runtime.sendMessage({ type: 'ekko/sidepanel/open' }).catch(() => {});
     });
@@ -443,15 +464,15 @@ if (window.top !== window.self) {
     if (!micButton) return;
     if (recorderState === 'recording') {
       micButton.classList.add('ekko-icon-button--active');
-      micButton.innerHTML = '<span aria-hidden="true">■</span>';
+      micButton.innerHTML = ICON_MIC_RECORDING;
       micButton.title = 'Stop recording';
     } else if (recorderState === 'processing') {
       micButton.classList.add('ekko-icon-button--active');
-      micButton.innerHTML = '<span aria-hidden="true">⏳</span>';
+      micButton.innerHTML = ICON_MIC_PROCESSING;
       micButton.title = 'Processing…';
     } else {
       micButton.classList.remove('ekko-icon-button--active');
-      micButton.innerHTML = '<span aria-hidden="true">🎙️</span>';
+      micButton.innerHTML = ICON_MIC_IDLE;
       micButton.title = 'Start recording';
     }
   }
