@@ -211,19 +211,57 @@ export default function App() {
   const [composePreset, setComposePreset] = useState<ComposePresetId>('freeform');
   const [composeState, setComposeState] = useState<'idle' | 'recording' | 'processing' | 'streaming'>('idle');
   const [composeError, setComposeError] = useState<string | null>(null);
-  const [composeStreamValue, setComposeStreamValue] = useState('');
-  const [composeElapsedMs, setComposeElapsedMs] = useState(0);
-  const activeSessionIdRef = useRef<string | null>(null);
-  const lastDirectInsertValueRef = useRef<string>('');
-  const composeRecorderRef = useRef<MediaRecorder | null>(null);
+const [composeStreamValue, setComposeStreamValue] = useState('');
+const [composeElapsedMs, setComposeElapsedMs] = useState(0);
+const activeSessionIdRef = useRef<string | null>(null);
+const lastDirectInsertValueRef = useRef<string>('');
+const composeRecorderRef = useRef<MediaRecorder | null>(null);
   const composeChunksRef = useRef<Blob[]>([]);
   const composeTimerRef = useRef<number | null>(null);
   const composeStartTimeRef = useRef<number | null>(null);
   const composeAbortRef = useRef<AbortController | null>(null);
   const composeStreamRef = useRef<MediaStream | null>(null);
   const composeEntryIdRef = useRef<string | null>(null);
-  const composeSessionRef = useRef<LanguageModelSession | null>(null);
-  const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(null);
+const composeSessionRef = useRef<LanguageModelSession | null>(null);
+const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(null);
+
+  useEffect(() => {
+    const sendState = (open: boolean, tabId?: number) => {
+      chrome.runtime
+        ?.sendMessage({
+          type: 'ekko/sidepanel/state',
+          payload: { open, tabId }
+        } satisfies EkkoMessage)
+        .catch(() => {});
+    };
+
+    const getActiveTabId = async (): Promise<number | undefined> => {
+      if (!chrome.tabs?.query) return undefined;
+      try {
+        const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+        return tab?.id ?? undefined;
+      } catch {
+        return undefined;
+      }
+    };
+
+    const broadcast = async (open: boolean) => {
+      const tabId = await getActiveTabId();
+      sendState(open, tabId);
+    };
+
+    const handleVisibility = () => {
+      void broadcast(document.visibilityState !== 'hidden');
+    };
+
+    handleVisibility();
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      void broadcast(false);
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;

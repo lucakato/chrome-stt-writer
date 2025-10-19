@@ -413,8 +413,38 @@ if (window.top !== window.self) {
     settingsButton.type = 'button';
     settingsButton.title = 'Open settings';
     settingsButton.innerHTML = ICON_SETTINGS;
-    settingsButton.addEventListener('click', () => {
-      chrome.runtime.sendMessage({ type: 'ekko/sidepanel/open' }).catch(() => {});
+    settingsButton.addEventListener('click', async () => {
+      setStatus('Opening settings…');
+      try {
+        const response = await chrome.runtime.sendMessage<EkkoMessage, EkkoResponse>({
+          type: 'ekko/sidepanel/open',
+          payload: { action: 'toggle' }
+        });
+        if (!response || typeof response !== 'object' || !('ok' in response) || !response.ok) {
+          const message =
+            response && typeof response === 'object' && 'error' in response
+              ? String(response.error || 'Unable to open settings.')
+              : 'Unable to open settings.';
+          throw new Error(message);
+        }
+        const nextState =
+          response &&
+          typeof response === 'object' &&
+          'data' in response &&
+          response.data &&
+          typeof response.data === 'object' &&
+          'state' in response.data
+            ? ((response.data as { state?: string }).state ?? 'opened')
+            : 'opened';
+        if (nextState === 'closed') {
+          setStatus('Settings hidden.');
+        } else {
+          setStatus('Settings opened in side panel.');
+        }
+      } catch (error) {
+        console.warn('Unable to open Ekko side panel from widget', error);
+        setStatus('Unable to open settings.');
+      }
     });
 
     buttonGroup.appendChild(micButton);
@@ -779,6 +809,7 @@ if (window.top !== window.self) {
     setStatus('Generating…');
 
     try {
+      await queryDirectInsertState();
       const text = await composeWidgetAudio(audioBuffer);
       const delivered = await deliverComposeOutput(text);
       if (delivered) {

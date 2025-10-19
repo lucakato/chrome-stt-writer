@@ -54,7 +54,16 @@ export type EkkoMessage =
     }
   | {
       type: 'ekko/sidepanel/open';
-      payload?: Record<string, never>;
+      payload?: {
+        action?: 'toggle' | 'open' | 'close';
+      };
+    }
+  | {
+      type: 'ekko/sidepanel/state';
+      payload: {
+        open: boolean;
+        tabId?: number;
+      };
     }
   | {
       type: 'ekko/widget/insert';
