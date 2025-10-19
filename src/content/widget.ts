@@ -59,9 +59,20 @@ if (window.top !== window.self) {
   let mediaChunks: Blob[] = [];
   let composeTimer: number | null = null;
   let composeStart: number | null = null;
+  let composeLimitTimer: number | null = null;
   let popupOpen = false;
   let lastComposeAudio: ArrayBuffer | null = null;
   let hasComposeRecording = false;
+  let transcribeOutputCard: HTMLDivElement | null = null;
+  let transcribeOutputScroll: HTMLDivElement | null = null;
+  let transcribeOutputPlaceholder: HTMLParagraphElement | null = null;
+  let transcribeOutputText: HTMLParagraphElement | null = null;
+  let transcribeOutputValue = '';
+  let composeOutputCard: HTMLDivElement | null = null;
+  let composeOutputScroll: HTMLDivElement | null = null;
+  let composeOutputPlaceholder: HTMLParagraphElement | null = null;
+  let composeOutputText: HTMLParagraphElement | null = null;
+  let composeOutputValue = '';
 
   let root: HTMLDivElement | null = null;
   let triggerButton: HTMLButtonElement | null = null;
@@ -165,11 +176,22 @@ if (window.top !== window.self) {
         resize: vertical;
         min-height: 72px;
         color: #1f1f3d;
+        width: 100%;
+        box-sizing: border-box;
+        margin-top: 10px;
+      }
+      .ekko-controls {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 10px;
       }
       .ekko-popup__footer {
         display: flex;
         justify-content: space-between;
         align-items: center;
+        gap: 8px;
+        margin-top: 12px;
       }
       .ekko-popup__status,
       .ekko-popup__timer {
@@ -193,6 +215,40 @@ if (window.top !== window.self) {
         background: #5968f2;
         color: #ffffff;
       }
+      .ekko-output {
+        display: none;
+        flex-direction: column;
+        gap: 6px;
+        border-radius: 12px;
+        border: 1px solid rgba(89, 104, 242, 0.2);
+        background: rgba(89, 104, 242, 0.08);
+        padding: 10px;
+        max-height: 180px;
+        margin-top: 10px;
+        overflow: hidden;
+        width: 100%;
+        box-sizing: border-box;
+      }
+      .ekko-output__scroll {
+        overflow-y: auto;
+        max-height: 140px;
+        padding-right: 4px;
+        width: 100%;
+        box-sizing: border-box;
+      }
+      .ekko-output__text {
+        margin: 0;
+        font-size: 0.82rem;
+        line-height: 1.4;
+        color: #1f1f3d;
+        white-space: pre-wrap;
+      }
+      .ekko-output__placeholder {
+        margin: 0;
+        font-size: 0.78rem;
+        color: #4c4c70;
+        font-style: italic;
+      }
       .ekko-icon-button--recording svg {
         animation: ekko-record-blink 1s ease-in-out infinite;
       }
@@ -212,6 +268,7 @@ if (window.top !== window.self) {
         padding: 8px 12px;
         font-weight: 600;
         cursor: pointer;
+        margin-left: auto;
       }
     `;
     document.head.appendChild(style);
@@ -306,29 +363,32 @@ if (window.top !== window.self) {
 
   async function deliverComposeOutput(text: string): Promise<boolean> {
     if (!text) {
+      setComposeOutput(null);
+      setComposeOutput('Compose returned no response.');
       setStatus('Compose returned no response.');
       return false;
     }
 
-    const body = `${text}`;
+    setComposeOutput(text);
 
     if (!directInsertEnabled) {
-      setStatus(body);
+      setStatus('');
       return true;
     }
 
     try {
       await insertComposeText(text);
-      setStatus(body);
+      setStatus('Draft inserted into page.');
       return true;
     } catch (error) {
       const copied = await copyToClipboard(text);
       if (copied) {
-        setStatus(body);
+        setStatus('Output copied to clipboard.');
         return true;
       }
       const message = error instanceof Error ? error.message : 'Compose failed.';
-      setStatus(`${message}\n${body}`.trim());
+      setComposeOutput(message);
+      setStatus(message);
       return false;
     }
   }
@@ -392,6 +452,23 @@ if (window.top !== window.self) {
     modeWrapper.appendChild(transcribeButton);
     modeWrapper.appendChild(composeButton);
 
+    const controlsRow = document.createElement('div');
+    controlsRow.className = 'ekko-controls';
+
+    transcribeOutputCard = document.createElement('div');
+    transcribeOutputCard.className = 'ekko-output';
+    transcribeOutputScroll = document.createElement('div');
+    transcribeOutputScroll.className = 'ekko-output__scroll';
+    transcribeOutputScroll.style.display = 'none';
+    transcribeOutputText = document.createElement('p');
+    transcribeOutputText.className = 'ekko-output__text';
+    transcribeOutputScroll.appendChild(transcribeOutputText);
+    transcribeOutputPlaceholder = document.createElement('p');
+    transcribeOutputPlaceholder.className = 'ekko-output__placeholder';
+    transcribeOutputPlaceholder.textContent = 'Your transcript will appear here.';
+    transcribeOutputCard.appendChild(transcribeOutputScroll);
+    transcribeOutputCard.appendChild(transcribeOutputPlaceholder);
+
     promptTextarea = document.createElement('textarea');
     promptTextarea.className = 'ekko-popup__prompt';
     promptTextarea.placeholder = 'Not what you want? Assist the AI.';
@@ -403,6 +480,24 @@ if (window.top !== window.self) {
       );
     });
 
+    composeOutputCard = document.createElement('div');
+    composeOutputCard.className = 'ekko-output';
+
+    composeOutputScroll = document.createElement('div');
+    composeOutputScroll.className = 'ekko-output__scroll';
+    composeOutputScroll.style.display = 'none';
+
+    composeOutputText = document.createElement('p');
+    composeOutputText.className = 'ekko-output__text';
+    composeOutputScroll.appendChild(composeOutputText);
+
+    composeOutputPlaceholder = document.createElement('p');
+    composeOutputPlaceholder.className = 'ekko-output__placeholder';
+    composeOutputPlaceholder.textContent = 'After you record, your AI draft will appear here.';
+
+    composeOutputCard.appendChild(composeOutputScroll);
+    composeOutputCard.appendChild(composeOutputPlaceholder);
+
     const footer = document.createElement('div');
     footer.className = 'ekko-popup__footer';
 
@@ -411,8 +506,6 @@ if (window.top !== window.self) {
 
     timerLabel = document.createElement('span');
     timerLabel.className = 'ekko-popup__timer';
-
-    const buttonGroup = document.createElement('div');
 
     micButton = document.createElement('button');
     micButton.className = 'ekko-icon-button';
@@ -468,8 +561,8 @@ if (window.top !== window.self) {
       }
     });
 
-    buttonGroup.appendChild(micButton);
-    buttonGroup.appendChild(settingsButton);
+    controlsRow.appendChild(micButton);
+    controlsRow.appendChild(settingsButton);
 
     regenerateButton = document.createElement('button');
     regenerateButton.type = 'button';
@@ -478,16 +571,20 @@ if (window.top !== window.self) {
     regenerateButton.addEventListener('click', handleRegenerate);
 
     footer.appendChild(statusLabel);
-    footer.appendChild(buttonGroup);
     footer.appendChild(regenerateButton);
 
     body.appendChild(modeWrapper);
+    body.appendChild(controlsRow);
+    body.appendChild(transcribeOutputCard);
     body.appendChild(promptTextarea);
+    body.appendChild(composeOutputCard);
     body.appendChild(footer);
 
     popup.appendChild(header);
     popup.appendChild(body);
     root?.appendChild(popup);
+    updateTranscribeOutputVisibility();
+    updateComposeOutputVisibility();
   }
 
   function updateModeUi() {
@@ -509,6 +606,8 @@ if (window.top !== window.self) {
         promptTextarea.value = settings.composePrompt;
       }
     }
+    updateTranscribeOutputVisibility();
+    updateComposeOutputVisibility();
   }
 
   function updateMicUi() {
@@ -533,7 +632,11 @@ if (window.top !== window.self) {
 
   function setStatus(text: string) {
     if (statusLabel) {
-      statusLabel.textContent = text;
+      if (settings.mode === 'compose' || settings.mode === 'transcribe') {
+        statusLabel.textContent = '';
+      } else {
+        statusLabel.textContent = text;
+      }
     }
   }
 
@@ -547,6 +650,68 @@ if (window.top !== window.self) {
     const minutes = Math.floor(totalSeconds / 60);
     const seconds = totalSeconds % 60;
     timerLabel.textContent = `${minutes}:${String(seconds).padStart(2, '0')}`;
+  }
+
+  function updateComposeOutputVisibility() {
+    if (!composeOutputCard) return;
+    const visible = settings.mode === 'compose';
+    composeOutputCard.style.display = visible ? 'flex' : 'none';
+    if (!visible) return;
+    const hasText = composeOutputValue.length > 0;
+    if (composeOutputScroll) {
+      composeOutputScroll.style.display = hasText ? 'block' : 'none';
+    }
+    if (composeOutputPlaceholder) {
+      composeOutputPlaceholder.style.display = hasText ? 'none' : 'block';
+    }
+    if (composeOutputText) {
+      composeOutputText.textContent = composeOutputValue;
+    }
+  }
+
+  function setComposeOutput(text: string | null) {
+    composeOutputValue = text && text.trim() ? text.trim() : '';
+    if (composeOutputText) {
+      composeOutputText.textContent = composeOutputValue;
+    }
+    if (composeOutputScroll) {
+      composeOutputScroll.style.display = composeOutputValue ? 'block' : 'none';
+    }
+    if (composeOutputPlaceholder) {
+      composeOutputPlaceholder.style.display = composeOutputValue ? 'none' : 'block';
+    }
+    updateComposeOutputVisibility();
+  }
+
+  function updateTranscribeOutputVisibility() {
+    if (!transcribeOutputCard) return;
+    const visible = settings.mode === 'transcribe';
+    transcribeOutputCard.style.display = visible ? 'flex' : 'none';
+    if (!visible) return;
+    const hasText = transcribeOutputValue.length > 0;
+    if (transcribeOutputScroll) {
+      transcribeOutputScroll.style.display = hasText ? 'block' : 'none';
+    }
+    if (transcribeOutputPlaceholder) {
+      transcribeOutputPlaceholder.style.display = hasText ? 'none' : 'block';
+    }
+    if (transcribeOutputText) {
+      transcribeOutputText.textContent = transcribeOutputValue;
+    }
+  }
+
+  function setTranscribeOutput(text: string | null) {
+    transcribeOutputValue = text && text.trim() ? text.trim() : '';
+    if (transcribeOutputText) {
+      transcribeOutputText.textContent = transcribeOutputValue;
+    }
+    if (transcribeOutputScroll) {
+      transcribeOutputScroll.style.display = transcribeOutputValue ? 'block' : 'none';
+    }
+    if (transcribeOutputPlaceholder) {
+      transcribeOutputPlaceholder.style.display = transcribeOutputValue ? 'none' : 'block';
+    }
+    updateTranscribeOutputVisibility();
   }
 
   function ensureWidget() {
@@ -563,6 +728,8 @@ if (window.top !== window.self) {
     }
     updateModeUi();
     updateMicUi();
+    updateTranscribeOutputVisibility();
+    updateComposeOutputVisibility();
     setStatus('');
     if (promptTextarea && (!document.activeElement || document.activeElement !== promptTextarea)) {
       promptTextarea.value = settings.composePrompt;
@@ -580,6 +747,7 @@ if (window.top !== window.self) {
   }
 
   async function startTranscribe() {
+    setTranscribeOutput('Listening…');
     const SpeechRecognitionCtor =
       (window as typeof window & { webkitSpeechRecognition?: typeof SpeechRecognition }).SpeechRecognition ||
       (window as typeof window & { webkitSpeechRecognition?: typeof SpeechRecognition }).webkitSpeechRecognition;
@@ -615,6 +783,10 @@ if (window.top !== window.self) {
       } else if (transcribeFinal) {
         setStatus(transcribeFinal);
       }
+      const interim = transcribeInterim.trim();
+      const finalText = transcribeFinal.trim();
+      const combined = interim ? `${finalText}${finalText ? ' ' : ''}${interim}`.trim() : finalText;
+      setTranscribeOutput(combined || null);
     };
 
     recognition.onerror = (event) => {
@@ -637,6 +809,7 @@ if (window.top !== window.self) {
 
     recognitionTimer = window.setTimeout(() => {
       setStatus('Stopped after 3 minutes to stay responsive.');
+      setTranscribeOutput('Stopped after 3 minutes to stay responsive.');
       stopTranscribe();
     }, 3 * 60 * 1000);
   }
@@ -654,6 +827,7 @@ if (window.top !== window.self) {
     const text = (transcribeFinal || transcribeInterim).trim();
     transcribeFinal = '';
     transcribeInterim = '';
+    setTranscribeOutput(text || null);
 
     if (text) {
       recorderState = 'processing';
@@ -707,6 +881,7 @@ if (window.top !== window.self) {
       /* ignore */
     }
     hasComposeRecording = false;
+    setComposeOutput(null);
 
     mediaRecorder.ondataavailable = (event) => {
       if (event.data && event.data.size > 0) {
@@ -719,11 +894,12 @@ if (window.top !== window.self) {
         window.clearInterval(composeTimer);
         composeTimer = null;
       }
-      composeStart = null;
-      setTimer(0);
-      recorderState = 'processing';
-      updateMicUi();
-      setStatus('Generating…');
+    composeStart = null;
+    setTimer(0);
+    recorderState = 'processing';
+    updateMicUi();
+    setComposeOutput('Generating…');
+    setStatus('Generating…');
 
       try {
         const blobMime = mediaRecorder?.mimeType || mimeType || 'audio/webm';
@@ -752,16 +928,30 @@ if (window.top !== window.self) {
     recorderState = 'recording';
     composeStart = Date.now();
     updateMicUi();
-    setStatus('Recording…');
+    setComposeOutput('Recording… 0:00');
+    setStatus('');
     setTimer(0);
+
+    if (composeLimitTimer) {
+      window.clearTimeout(composeLimitTimer);
+    }
+    composeLimitTimer = window.setTimeout(() => {
+      composeStart = null;
+      setStatus('Time limit reached. Processing…');
+      stopCompose();
+    }, WIDGET_COMPOSE_MAX_DURATION_MS);
 
     composeTimer = window.setInterval(() => {
       if (!composeStart) return;
       const elapsed = Date.now() - composeStart;
       setTimer(elapsed);
+      const minutes = Math.floor(elapsed / 60000);
+      const seconds = Math.floor((elapsed % 60000) / 1000);
+      setComposeOutput(`Recording… ${minutes}:${String(seconds).padStart(2, '0')}`);
       if (elapsed >= WIDGET_COMPOSE_MAX_DURATION_MS) {
         composeStart = null;
-        setStatus('Time limit reached. Processing…');
+        setStatus('');
+        setComposeOutput('Time limit reached. Processing…');
         stopCompose();
       }
     }, 200);
@@ -770,6 +960,10 @@ if (window.top !== window.self) {
   function stopCompose() {
     if (mediaRecorder && mediaRecorder.state === 'recording') {
       mediaRecorder.stop();
+    }
+    if (composeLimitTimer) {
+      window.clearTimeout(composeLimitTimer);
+      composeLimitTimer = null;
     }
   }
 
@@ -834,6 +1028,7 @@ if (window.top !== window.self) {
     if (recorderState === 'processing') {
       return;
     }
+    setComposeOutput(null);
     recorderState = 'processing';
     updateMicUi();
     setStatus('Generating…');

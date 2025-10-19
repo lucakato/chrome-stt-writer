@@ -1530,7 +1530,9 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
             </h2>
             <div className="compose-output">
               {composeStreamValue ? (
-                <p className="compose-output__text">{composeStreamValue}</p>
+                <div className="compose-output__scroll">
+                  <p className="compose-output__text">{composeStreamValue}</p>
+                </div>
               ) : (
                 <p className="compose-output__placeholder">
                   After you record, Gemini Nano will stream the generated response here.

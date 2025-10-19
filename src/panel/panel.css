@@ -406,6 +406,7 @@ body {
 
 .compose-output {
   min-height: 160px;
+  max-height: 240px;
   border-radius: 12px;
   border: 1px solid var(--border);
   background: var(--surface-variant);
@@ -413,12 +414,19 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  overflow: hidden;
 }
 
 .compose-output__placeholder {
   color: var(--text-secondary);
   font-style: italic;
   margin: 0;
+}
+
+.compose-output__scroll {
+  overflow-y: auto;
+  max-height: 212px;
+  padding-right: 6px;
 }
 
 .compose-output__text {
