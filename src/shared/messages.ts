@@ -56,6 +56,7 @@ export type EkkoMessage =
       type: 'ekko/sidepanel/open';
       payload?: {
         action?: 'toggle' | 'open' | 'close';
+        windowId?: number;
       };
     }
   | {
@@ -63,6 +64,7 @@ export type EkkoMessage =
       payload: {
         open: boolean;
         tabId?: number;
+        windowId?: number;
       };
     }
   | {

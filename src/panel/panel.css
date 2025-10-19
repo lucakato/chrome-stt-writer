@@ -161,7 +161,7 @@ body {
   font-weight: 600;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
   background: var(--ekko-primary);
   color: white;
   cursor: pointer;
@@ -177,6 +177,58 @@ body {
   opacity: 0.6;
   cursor: not-allowed;
   box-shadow: none;
+}
+
+.record-button__icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.12);
+  color: inherit;
+  transition: background 0.2s ease, transform 0.2s ease, color 0.2s ease;
+}
+
+.record-button__icon--off {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.record-button__icon--idle {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.record-button__icon--recording {
+  background: #ffffff;
+  color: var(--ekko-primary);
+  animation: record-blink 1s ease-in-out infinite;
+}
+
+.record-button--active {
+  box-shadow: 0 8px 16px rgba(89, 104, 242, 0.35);
+}
+
+@keyframes record-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
 }
 
 .status-chip {

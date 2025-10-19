@@ -186,10 +186,22 @@ if (window.top !== window.self) {
         align-items: center;
         justify-content: center;
         cursor: pointer;
+        transition: color 0.2s ease, background 0.2s ease;
       }
       .ekko-icon-button--active {
         background: #5968f2;
         color: #ffffff;
+      }
+      .ekko-icon-button--recording svg {
+        animation: ekko-record-blink 1s ease-in-out infinite;
+      }
+      @keyframes ekko-record-blink {
+        0%, 100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.4;
+        }
       }
       .ekko-popup__regen {
         border: none;
@@ -416,9 +428,17 @@ if (window.top !== window.self) {
     settingsButton.addEventListener('click', async () => {
       setStatus('Opening settings…');
       try {
+        const payloadWindowId =
+          typeof chrome !== 'undefined' && chrome.windows
+            ? await chrome.windows
+                .getCurrent()
+                .then((win) => win?.id)
+                .catch(() => undefined)
+            : undefined;
+
         const response = await chrome.runtime.sendMessage<EkkoMessage, EkkoResponse>({
           type: 'ekko/sidepanel/open',
-          payload: { action: 'toggle' }
+          payload: { action: 'toggle', windowId: payloadWindowId ?? undefined }
         });
         if (!response || typeof response !== 'object' || !('ok' in response) || !response.ok) {
           const message =
@@ -494,14 +514,17 @@ if (window.top !== window.self) {
     if (!micButton) return;
     if (recorderState === 'recording') {
       micButton.classList.add('ekko-icon-button--active');
+      micButton.classList.add('ekko-icon-button--recording');
       micButton.innerHTML = ICON_MIC_RECORDING;
       micButton.title = 'Stop recording';
     } else if (recorderState === 'processing') {
       micButton.classList.add('ekko-icon-button--active');
+      micButton.classList.remove('ekko-icon-button--recording');
       micButton.innerHTML = ICON_MIC_PROCESSING;
       micButton.title = 'Processing…';
     } else {
       micButton.classList.remove('ekko-icon-button--active');
+      micButton.classList.remove('ekko-icon-button--recording');
       micButton.innerHTML = ICON_MIC_IDLE;
       micButton.title = 'Start recording';
     }

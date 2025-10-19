@@ -27,6 +27,9 @@ import {
   type EkkoMode,
   type EkkoSettings
 } from '@shared/settings';
+import { MdKeyboardVoice } from 'react-icons/md';
+import { LuAudioLines } from 'react-icons/lu';
+import { IoMicOffSharp } from 'react-icons/io5';
 
 type Mode = 'transcribe' | 'compose';
 
@@ -37,6 +40,14 @@ type RewritePreset =
   | 'bullet'
   | 'action-items'
   | 'custom';
+
+type MicVisualState = 'idle' | 'recording' | 'off';
+
+function MicIcon({ state }: { state: MicVisualState }) {
+  const Icon =
+    state === 'recording' ? LuAudioLines : state === 'off' ? IoMicOffSharp : MdKeyboardVoice;
+  return <Icon size={20} aria-hidden="true" focusable="false" />;
+}
 
 type ComposePresetId = 'freeform' | 'email-formal' | 'summary' | 'action-plan';
 
@@ -226,28 +237,28 @@ const composeSessionRef = useRef<LanguageModelSession | null>(null);
 const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(null);
 
   useEffect(() => {
-    const sendState = (open: boolean, tabId?: number) => {
+    const sendState = (open: boolean, tabId?: number, windowId?: number) => {
       chrome.runtime
         ?.sendMessage({
           type: 'ekko/sidepanel/state',
-          payload: { open, tabId }
+          payload: { open, tabId, windowId }
         } satisfies EkkoMessage)
         .catch(() => {});
     };
 
-    const getActiveTabId = async (): Promise<number | undefined> => {
-      if (!chrome.tabs?.query) return undefined;
+    const getActiveContext = async (): Promise<{ tabId?: number; windowId?: number }> => {
+      if (!chrome.tabs?.query) return {};
       try {
         const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-        return tab?.id ?? undefined;
+        return { tabId: tab?.id ?? undefined, windowId: tab?.windowId ?? undefined };
       } catch {
-        return undefined;
+        return {};
       }
     };
 
     const broadcast = async (open: boolean) => {
-      const tabId = await getActiveTabId();
-      sendState(open, tabId);
+      const { tabId, windowId } = await getActiveContext();
+      sendState(open, tabId, windowId);
     };
 
     const handleVisibility = () => {
@@ -419,6 +430,23 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
   const composeOutput = composeStreamValue.trim();
   const isComposeRecording = composeState === 'recording';
   const isComposeBusy = composeState === 'processing' || composeState === 'streaming';
+  const transcribeMicReady = micStatus === 'granted' && (sttSupported || isRecording);
+  const transcribeMicState: MicVisualState = isRecording ? 'recording' : transcribeMicReady ? 'idle' : 'off';
+  const transcribeStatusText = isRecording
+    ? 'Listening…'
+    : transcribeMicReady
+    ? 'Ready'
+    : 'Microphone unavailable';
+  const composeMicAvailable = micStatus === 'granted';
+  const composeMicState: MicVisualState = isComposeRecording ? 'recording' : composeMicAvailable ? 'idle' : 'off';
+  const composeStatusText =
+    isComposeRecording
+      ? 'Recording…'
+      : composeState === 'streaming'
+      ? 'Generating…'
+      : composeMicAvailable
+      ? 'Ready'
+      : 'Microphone unavailable';
 
   const handleSummarize = useCallback(async () => {
     if (!activeTranscript) {
@@ -1257,16 +1285,16 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
               <div className="record-controls__main">
                 <button
                   type="button"
-                  className="record-button"
+                  className={`record-button ${isRecording ? 'record-button--active' : ''}`}
                   onClick={handleToggleRecording}
                   disabled={micStatus === 'pending' || (!sttSupported && !isRecording)}
                 >
-                  {isRecording ? 'Stop recording' : 'Start recording'}
-                  <span
-                    className={`status-chip ${isRecording ? 'status-chip--active' : ''}`}
-                    aria-live="polite"
-                  >
-                    {isRecording ? 'Listening…' : 'Idle'}
+                  <span className={`record-button__icon record-button__icon--${transcribeMicState}`}>
+                    <MicIcon state={transcribeMicState} />
+                  </span>
+                  <span>{isRecording ? 'Stop recording' : 'Start recording'}</span>
+                  <span className="sr-only" aria-live="polite">
+                    {transcribeStatusText}
                   </span>
                 </button>
                 <span
@@ -1460,7 +1488,7 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
             <div className="compose-controls">
               <button
                 type="button"
-                className="record-button"
+                className={`record-button ${isComposeRecording ? 'record-button--active' : ''}`}
                 onClick={isComposeRecording ? () => handleStopComposeRecording(false) : handleStartComposeRecording}
                 disabled={
                   isComposeBusy ||
@@ -1470,12 +1498,12 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
                   promptAvailabilityState === 'error'
                 }
               >
-                {isComposeRecording ? 'Stop capture' : 'Start capture'}
-                <span
-                  className={`status-chip ${isComposeRecording ? 'status-chip--active' : ''}`}
-                  aria-live="polite"
-                >
-                  {isComposeRecording ? 'Recording…' : composeState === 'streaming' ? 'Generating…' : 'Idle'}
+                <span className={`record-button__icon record-button__icon--${composeMicState}`}>
+                  <MicIcon state={composeMicState} />
+                </span>
+                <span>{isComposeRecording ? 'Stop capture' : 'Start capture'}</span>
+                <span className="sr-only" aria-live="polite">
+                  {composeStatusText}
                 </span>
               </button>
               {composeState === 'streaming' && (

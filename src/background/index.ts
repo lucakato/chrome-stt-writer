@@ -9,47 +9,31 @@ const SIDE_PANEL_STATE_KEY = 'ekko:sidepanel:state';
 type SidePanelTarget = { tabId?: number; windowId?: number };
 
 function resolveSidePanelTargetFromSender(sender: chrome.runtime.MessageSender): SidePanelTarget | null {
-  if (sender.tab?.id !== undefined) {
-    return { tabId: sender.tab.id };
-  }
   if (sender.tab?.windowId !== undefined) {
     return { windowId: sender.tab.windowId };
   }
-  return null;
-}
-
-function normalizeTarget(target: SidePanelTarget): SidePanelTarget | null {
-  if (target.windowId !== undefined) {
-    return { windowId: target.windowId };
-  }
-  if (target.tabId !== undefined) {
-    return { windowId: undefined, tabId: target.tabId };
+  if (sender.tab?.id !== undefined) {
+    return { tabId: sender.tab.id };
   }
   return null;
 }
 
-function getSidePanelStateKey(target: SidePanelTarget): string | null {
-  if (target.windowId !== undefined) {
-    return `window:${target.windowId}`;
-  }
-  if (target.tabId !== undefined) {
-    return `tab:${target.tabId}`;
-  }
-  return null;
+function getWindowStateKey(windowId: number): string {
+  return `window:${windowId}`;
 }
 
-async function resolveWindowTarget(target: SidePanelTarget): Promise<SidePanelTarget | null> {
+async function resolveWindowId(target: SidePanelTarget): Promise<number | null> {
   if (target.windowId !== undefined) {
-    return { windowId: target.windowId };
+    return target.windowId;
   }
   if (target.tabId !== undefined && chrome.tabs?.get) {
     try {
       const tab = await chrome.tabs.get(target.tabId);
       if (tab?.windowId !== undefined) {
-        return { windowId: tab.windowId };
+        return tab.windowId;
       }
-    } catch {
-      return null;
+    } catch (error) {
+      console.warn('Unable to resolve window for tab', target.tabId, error);
     }
   }
   return null;
@@ -97,15 +81,12 @@ async function loadSidePanelState(): Promise<void> {
 
 void loadSidePanelState();
 
-function getSidePanelState(target: SidePanelTarget): boolean {
-  const key = getSidePanelStateKey(target);
-  if (!key) return false;
-  return sidePanelState.get(key) ?? false;
+function getWindowState(windowId: number): boolean {
+  return sidePanelState.get(getWindowStateKey(windowId)) ?? false;
 }
 
-function setSidePanelState(target: SidePanelTarget, isOpen: boolean): void {
-  const key = getSidePanelStateKey(target);
-  if (!key) return;
+function setWindowState(windowId: number, isOpen: boolean): void {
+  const key = getWindowStateKey(windowId);
   if (isOpen) {
     sidePanelState.set(key, true);
   } else {
@@ -114,10 +95,25 @@ function setSidePanelState(target: SidePanelTarget, isOpen: boolean): void {
   persistSidePanelState();
 }
 
-function clearSidePanelStateByKey(key: string): void {
-  if (!key) return;
-  sidePanelState.delete(key);
+function clearSidePanelStateByWindow(windowId: number): void {
+  sidePanelState.delete(getWindowStateKey(windowId));
   persistSidePanelState();
+}
+
+async function getSidePanelState(target: SidePanelTarget): Promise<boolean> {
+  const windowId = await resolveWindowId(target);
+  if (windowId === null) {
+    return false;
+  }
+  return getWindowState(windowId);
+}
+
+async function setSidePanelState(target: SidePanelTarget, isOpen: boolean): Promise<void> {
+  const windowId = await resolveWindowId(target);
+  if (windowId === null) {
+    return;
+  }
+  setWindowState(windowId, isOpen);
 }
 
 async function openSidePanel(target: SidePanelTarget): Promise<void> {
@@ -127,13 +123,11 @@ async function openSidePanel(target: SidePanelTarget): Promise<void> {
 
   if (target.tabId !== undefined) {
     await chrome.sidePanel.open({ tabId: target.tabId });
-    setSidePanelState(target, true);
     return;
   }
 
   if (target.windowId !== undefined) {
     await chrome.sidePanel.open({ windowId: target.windowId });
-    setSidePanelState(target, true);
     return;
   }
 
@@ -157,32 +151,26 @@ async function openSidePanelForActiveTab(): Promise<void> {
   await openSidePanel(target);
 }
 
-async function closeSidePanel(target: SidePanelTarget): Promise<void> {
+async function closeSidePanel(target: SidePanelTarget, hint?: { tabId?: number }): Promise<void> {
   if (!chrome.sidePanel?.setOptions) {
     throw new Error('Side panel API is not available.');
   }
 
   if (target.tabId !== undefined) {
-    await chrome.sidePanel.setOptions({
-      tabId: target.tabId,
-      enabled: false
-    });
-    setSidePanelState(target, false);
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    try {
-      await chrome.sidePanel.setOptions({
-        tabId: target.tabId,
-        path: 'sidepanel.html',
-        enabled: true
-      });
-    } catch (error) {
-      console.warn('Unable to re-enable side panel for tab', error);
-    }
+    await disableSidePanelForTab(target.tabId);
     return;
   }
 
   if (target.windowId !== undefined) {
-    throw new Error('Closing side panel for a window is not supported.');
+    const tabId =
+      hint?.tabId ??
+      (await getActiveTabIdInWindow(target.windowId));
+
+    if (tabId === undefined) {
+      throw new Error('Unable to determine tab for side panel close.');
+    }
+    await disableSidePanelForTab(tabId);
+    return;
   }
 
   throw new Error('No side panel target specified.');
@@ -191,6 +179,31 @@ async function closeSidePanel(target: SidePanelTarget): Promise<void> {
 async function getActiveTabId() {
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   return tab?.id;
+}
+
+async function getActiveTabIdInWindow(windowId: number): Promise<number | undefined> {
+  const [tab] = await chrome.tabs.query({ active: true, windowId });
+  return tab?.id;
+}
+
+async function disableSidePanelForTab(tabId: number): Promise<void> {
+  if (!chrome.sidePanel?.setOptions) {
+    throw new Error('Side panel API is not available.');
+  }
+  await chrome.sidePanel.setOptions({
+    tabId,
+    enabled: false
+  });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  try {
+    await chrome.sidePanel.setOptions({
+      tabId,
+      path: 'sidepanel.html',
+      enabled: true
+    });
+  } catch (error) {
+    console.warn('Unable to re-enable side panel for tab', error);
+  }
 }
 
 async function toggleDirectInsert(enabled: boolean) {
@@ -436,15 +449,9 @@ if (chrome.action?.onClicked) {
   });
 }
 
-if (chrome.tabs?.onRemoved) {
-  chrome.tabs.onRemoved.addListener((tabId) => {
-    clearSidePanelStateByKey(`tab:${tabId}`);
-  });
-}
-
 if (chrome.windows?.onRemoved) {
   chrome.windows.onRemoved.addListener((windowId) => {
-    clearSidePanelStateByKey(`window:${windowId}`);
+    clearSidePanelStateByWindow(windowId);
   });
 }
 
@@ -474,17 +481,31 @@ chrome.runtime.onMessage.addListener((message: EkkoMessage, sender, sendResponse
       message.payload && typeof message.payload === 'object' && 'tabId' in message.payload
         ? (message.payload as { tabId?: number }).tabId
         : undefined;
+    const windowIdFromPayload =
+      message.payload && typeof message.payload === 'object' && 'windowId' in message.payload
+        ? (message.payload as { windowId?: number }).windowId
+        : undefined;
     const target =
-      tabIdFromPayload !== undefined
+      windowIdFromPayload !== undefined
+        ? { windowId: windowIdFromPayload }
+        : tabIdFromPayload !== undefined
         ? { tabId: tabIdFromPayload }
         : resolveSidePanelTargetFromSender(sender) ??
           (sender.tab?.windowId !== undefined ? { windowId: sender.tab.windowId } : null);
 
-    if (target) {
-      setSidePanelState(target, open);
+    if (!target) {
+      sendResponse({ ok: false, error: 'Unable to determine side panel window.' } satisfies EkkoResponse);
+      return true;
     }
 
-    sendResponse({ ok: true } satisfies EkkoResponse);
+    setSidePanelState(target, open)
+      .then(() => {
+        sendResponse({ ok: true } satisfies EkkoResponse);
+      })
+      .catch((error) => {
+        const description = error instanceof Error ? error.message : 'Unable to update side panel state.';
+        sendResponse({ ok: false, error: description } satisfies EkkoResponse);
+      });
     return true;
   }
 
@@ -495,6 +516,12 @@ chrome.runtime.onMessage.addListener((message: EkkoMessage, sender, sendResponse
       return true;
     }
 
+    const payloadWindowId =
+      message.payload && typeof message.payload === 'object' && 'windowId' in message.payload
+        ? (message.payload as { windowId?: number }).windowId
+        : undefined;
+    const senderWindowId = sender.tab?.windowId;
+
     (async () => {
       try {
         const action =
@@ -502,14 +529,40 @@ chrome.runtime.onMessage.addListener((message: EkkoMessage, sender, sendResponse
             ? (message.payload as { action?: 'toggle' | 'open' | 'close' }).action ?? 'toggle'
             : 'toggle';
 
-        const currentlyOpen = getSidePanelState(target);
+        const windowHint = senderWindowId ?? payloadWindowId;
+        const currentlyOpen =
+          typeof windowHint === 'number'
+            ? getWindowState(windowHint)
+            : await getSidePanelState(target);
         const resolvedAction =
           action === 'toggle' ? (currentlyOpen ? 'close' : 'open') : action;
 
+        const knownWindow =
+          senderWindowId ??
+          payloadWindowId ??
+          (await resolveWindowId(target)) ??
+          undefined;
+
         if (resolvedAction === 'close') {
-          await closeSidePanel(target);
+          const hintTabId =
+            sender.tab?.id ?? (typeof knownWindow === 'number' ? await getActiveTabIdInWindow(knownWindow) : undefined);
+          await closeSidePanel(target, { tabId: hintTabId });
+          if (typeof knownWindow === 'number') {
+            setWindowState(knownWindow, false);
+          } else {
+            await setSidePanelState(target, false);
+          }
         } else {
           await openSidePanel(target);
+          const windowForState =
+            knownWindow ??
+            (await resolveWindowId(target)) ??
+            undefined;
+          if (typeof windowForState === 'number') {
+            setWindowState(windowForState, true);
+          } else {
+            await setSidePanelState(target, true);
+          }
         }
 
         sendResponse({
