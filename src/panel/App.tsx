@@ -1249,11 +1249,12 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
   return (
     <div className="app">
       <header className="app__header">
-        <div className="brand" aria-live="polite">
-          <span className="brand__title">Ekko: Write with Voice</span>
-          <span className="brand__subtitle">
-            Capture or compose with on-device AI.
-          </span>
+        <div className="app__headline">
+          <div className="brand" aria-live="polite">
+            <span className="brand__title">Ekko: Write with Voice</span>
+            <span className="brand__subtitle">Capture or compose with on-device AI.</span>
+          </div>
+          <span className="pill pill--muted">Chrome {chromeVersion}</span>
         </div>
         <div className="mode-switch" role="tablist" aria-label="Ekko modes">
           <button
@@ -1275,7 +1276,6 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
             Compose
           </button>
         </div>
-        <span className="pill">Chrome {chromeVersion}</span>
       </header>
 
       {mode === 'transcribe' && (

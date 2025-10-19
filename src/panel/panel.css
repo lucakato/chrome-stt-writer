@@ -43,8 +43,16 @@ body {
 
 .app__header {
   display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.app__headline {
+  display: flex;
+  width: 100%;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
 }
 
@@ -83,17 +91,24 @@ body {
 .brand {
   display: flex;
   flex-direction: column;
+  gap: 2px;
 }
 
 .brand__title {
   font-size: 1.2rem;
   font-weight: 700;
   color: var(--ekko-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .brand__subtitle {
   font-size: 0.8rem;
   color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .pill {
@@ -106,6 +121,14 @@ body {
   color: var(--ekko-primary);
   font-size: 0.75rem;
   font-weight: 600;
+}
+
+.pill--muted {
+  font-size: 0.7rem;
+  padding: 4px 8px;
+  background: rgba(89, 104, 242, 0.1);
+  color: var(--text-secondary);
+  font-weight: 500;
 }
 
 .panel-section {
