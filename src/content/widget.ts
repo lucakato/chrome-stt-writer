@@ -33,6 +33,7 @@ const ICON_MIC_IDLE = iconMarkup(MdKeyboardVoice);
 const ICON_MIC_RECORDING = iconMarkup(RiVoiceprintFill);
 const ICON_SETTINGS = iconMarkup(IoSettingsSharp);
 const ICON_MIC_PROCESSING = '<span aria-hidden="true">⏳</span>';
+const WIDGET_COMPOSE_MAX_DURATION_MS = 90_000;
 
 type RecordingState = 'idle' | 'recording' | 'processing';
 
@@ -756,7 +757,13 @@ if (window.top !== window.self) {
 
     composeTimer = window.setInterval(() => {
       if (!composeStart) return;
-      setTimer(Date.now() - composeStart);
+      const elapsed = Date.now() - composeStart;
+      setTimer(elapsed);
+      if (elapsed >= WIDGET_COMPOSE_MAX_DURATION_MS) {
+        composeStart = null;
+        setStatus('Time limit reached. Processing…');
+        stopCompose();
+      }
     }, 200);
   }
 

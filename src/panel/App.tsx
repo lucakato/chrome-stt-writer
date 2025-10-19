@@ -75,7 +75,7 @@ type RewritePresetConfig = {
 };
 
 const BASE_SHARED_CONTEXT = 'Voice note rewrite to help organize research and meeting insights.';
-const COMPOSE_MAX_DURATION_MS = 15_000;
+const COMPOSE_MAX_DURATION_MS = 90_000;
 
 const rewritePresets: Array<{ id: RewritePreset; label: string }> = [
   { id: 'concise-formal', label: 'Concise • Formal' },
@@ -912,7 +912,7 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
       composeStartTimeRef.current = null;
       setComposeState('processing');
       if (auto) {
-        setComposeError('Recording paused after 15 seconds to keep sessions responsive.');
+        setComposeError('Recording paused after 90 seconds to keep sessions responsive.');
       }
       try {
         recorder.stop();
