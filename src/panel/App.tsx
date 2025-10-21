@@ -20,6 +20,13 @@ import {
   type PromptAvailabilityStatus
 } from '@shared/ai/prompt';
 import {
+  ComposeDraftResult,
+  coerceComposeDraft,
+  composeDraftToClipboardText,
+  deriveParagraphs,
+  joinParagraphs
+} from '@shared/compose';
+import {
   DEFAULT_SETTINGS,
   getEkkoSettings,
   observeEkkoSettings,
@@ -60,9 +67,12 @@ type HistoryEntry = {
   rewrite?: string;
   compose?: {
     presetId: ComposePresetId;
-    presetLabel: string;
+   presetLabel: string;
     instructions?: string;
     output: string;
+    subject?: string;
+    raw?: string;
+    paragraphs?: string[];
   };
 };
 
@@ -201,7 +211,7 @@ export default function App() {
 
   const [transcript, setTranscript] = useState('');
   const [rewritePreset, setRewritePreset] = useState<RewritePreset>('concise-formal');
-  const [directInsertEnabled, setDirectInsertEnabled] = useState(false);
+  const [directInsertEnabled, setDirectInsertEnabled] = useState(true);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [streamingSummary, setStreamingSummary] = useState<string | null>(null);
   const [language, setLanguage] = useState<string>(() => navigator.language ?? 'en-US');
@@ -222,11 +232,12 @@ export default function App() {
   const [composePreset, setComposePreset] = useState<ComposePresetId>('freeform');
   const [composeState, setComposeState] = useState<'idle' | 'recording' | 'processing' | 'streaming'>('idle');
   const [composeError, setComposeError] = useState<string | null>(null);
-const [composeStreamValue, setComposeStreamValue] = useState('');
-const [composeElapsedMs, setComposeElapsedMs] = useState(0);
-const activeSessionIdRef = useRef<string | null>(null);
-const lastDirectInsertValueRef = useRef<string>('');
-const composeRecorderRef = useRef<MediaRecorder | null>(null);
+  const [composeDraft, setComposeDraft] = useState<ComposeDraftResult | null>(null);
+  const [composeRawPreview, setComposeRawPreview] = useState('');
+  const [composeElapsedMs, setComposeElapsedMs] = useState(0);
+  const activeSessionIdRef = useRef<string | null>(null);
+  const lastDirectInsertValueRef = useRef<string>('');
+  const composeRecorderRef = useRef<MediaRecorder | null>(null);
   const composeChunksRef = useRef<Blob[]>([]);
   const composeTimerRef = useRef<number | null>(null);
   const composeStartTimeRef = useRef<number | null>(null);
@@ -427,7 +438,19 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
     promptAvailabilityState === 'unavailable' ||
     promptAvailabilityState === 'error';
 
-  const composeOutput = composeStreamValue.trim();
+  const composeSubject = composeDraft?.subject?.trim() ?? '';
+  const composeParagraphs =
+    composeDraft?.paragraphs && composeDraft.paragraphs.length > 0
+      ? composeDraft.paragraphs
+      : composeDraft?.content
+      ? deriveParagraphs(composeDraft.content)
+      : [];
+  const composeContent =
+    composeParagraphs.length > 0
+      ? joinParagraphs(composeParagraphs).trim()
+      : composeDraft?.content?.trim() ?? '';
+  const composeHasOutput = composeContent.length > 0;
+  const composeDisplayText = composeHasOutput ? composeContent : composeRawPreview.trim();
   const isComposeRecording = composeState === 'recording';
   const isComposeBusy = composeState === 'processing' || composeState === 'streaming';
   const transcribeMicReady = micStatus === 'granted' && (sttSupported || isRecording);
@@ -775,7 +798,8 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
 
       setComposeError(null);
       setComposeState('streaming');
-      setComposeStreamValue('');
+      setComposeDraft(null);
+      setComposeRawPreview('');
 
       const abortController = new AbortController();
       composeAbortRef.current = abortController;
@@ -815,14 +839,35 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
             }
           },
           onChunk: (chunk) => {
-            setComposeStreamValue(chunk);
+            setComposeRawPreview(chunk);
+            const parsed = coerceComposeDraft(chunk);
+            if (parsed) {
+              const chunkParagraphs =
+                parsed.paragraphs && parsed.paragraphs.length > 0
+                  ? parsed.paragraphs
+                  : deriveParagraphs(parsed.content);
+              setComposeDraft({
+                ...parsed,
+                content: joinParagraphs(chunkParagraphs).trim(),
+                paragraphs: chunkParagraphs
+              });
+            }
           },
           signal: abortController.signal,
           session
         });
 
-        const finalText = text.trim();
-        setComposeStreamValue(finalText);
+        const normalizedParagraphs =
+          text.paragraphs && text.paragraphs.length > 0 ? text.paragraphs : deriveParagraphs(text.content);
+        const normalizedDraft: ComposeDraftResult = {
+          raw: text.raw,
+          content: joinParagraphs(normalizedParagraphs).trim(),
+          subject: text.subject && text.subject.trim().length > 0 ? text.subject.trim() : undefined,
+          paragraphs: normalizedParagraphs
+        };
+
+        setComposeDraft(normalizedDraft);
+        setComposeRawPreview(normalizedDraft.raw);
         setComposeState('idle');
         setComposeElapsedMs(0);
         composeAbortRef.current = null;
@@ -830,18 +875,24 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
         const entryId = crypto.randomUUID();
         composeEntryIdRef.current = entryId;
         const createdAt = new Date().toLocaleTimeString();
+        const historyTitle =
+          normalizedDraft.subject ??
+          (normalizedDraft.content.slice(0, 60) || `${preset.label} draft`);
 
         setHistory((entries) => [
           {
             id: entryId,
-            title: finalText.slice(0, 60) || `${preset.label} draft`,
+            title: historyTitle,
             createdAt,
             actions: ['Composed'],
             compose: {
               presetId: preset.id,
               presetLabel: preset.label,
               instructions: instructions || undefined,
-              output: finalText
+              output: normalizedDraft.content,
+              subject: normalizedDraft.subject,
+              raw: normalizedDraft.raw,
+              paragraphs: normalizedDraft.paragraphs
             }
           },
           ...entries
@@ -850,12 +901,17 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
         chrome.runtime
           ?.sendMessage({
             type: 'ekko/ai/compose',
-            payload: {
-              sessionId: undefined,
-              preset: preset.id,
-              instructions: instructions || undefined,
-              output: finalText
-            }
+              payload: {
+                sessionId: undefined,
+                preset: preset.id,
+                instructions: instructions || undefined,
+                output: {
+                  content: normalizedDraft.content,
+                  subject: normalizedDraft.subject,
+                  raw: normalizedDraft.raw,
+                  paragraphs: normalizedDraft.paragraphs
+                }
+              }
           } satisfies EkkoMessage)
           .then((response: EkkoResponse | undefined) => {
             if (response?.ok && response.data && typeof response.data === 'object') {
@@ -887,6 +943,8 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
           composeSessionRef.current?.close?.();
           composeSessionRef.current = null;
         }
+        setComposeDraft(null);
+        setComposeRawPreview('');
         setComposeState('idle');
       } finally {
         composeAbortRef.current = null;
@@ -944,7 +1002,8 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
 
     try {
       setComposeError(null);
-      setComposeStreamValue('');
+      setComposeDraft(null);
+      setComposeRawPreview('');
       setComposeElapsedMs(0);
       composeChunksRef.current = [];
       composeEntryIdRef.current = null;
@@ -1036,36 +1095,91 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
   const handleCancelCompose = useCallback(() => {
     composeAbortRef.current?.abort();
     composeAbortRef.current = null;
+    setComposeDraft(null);
+    setComposeRawPreview('');
     setComposeState('idle');
     setComposeError('Compose request cancelled.');
   }, []);
 
   const handleCopyCompose = useCallback(async () => {
-    if (!composeOutput) return;
+    const draft = composeDraft;
+    const fallback = composeRawPreview.trim();
+    const textToCopy = draft ? composeDraftToClipboardText(draft) : fallback;
+    if (!textToCopy) return;
     try {
-      await navigator.clipboard.writeText(composeOutput);
+      await navigator.clipboard.writeText(textToCopy);
     } catch (error) {
       console.warn('Unable to copy compose output', error);
     }
-  }, [composeOutput]);
+  }, [composeDraft, composeRawPreview]);
 
   const handleInsertCompose = useCallback(() => {
-    if (!composeOutput) return;
+    const draft = composeDraft;
+    const fallbackContent = composeRawPreview.trim();
+    const fallbackParagraphs = fallbackContent ? deriveParagraphs(fallbackContent) : [];
+    const payload = draft
+      ? {
+          content: draft.content,
+          subject: draft.subject,
+          paragraphs: draft.paragraphs
+        }
+      : fallbackContent
+      ? {
+          content: joinParagraphs(fallbackParagraphs),
+          paragraphs: fallbackParagraphs
+        }
+      : null;
+
+    if (!payload) return;
+
     chrome.runtime
       ?.sendMessage({
         type: 'ekko/direct-insert/apply',
-        payload: { text: composeOutput }
+        payload: { draft: payload }
       } satisfies EkkoMessage)
       .catch((error: unknown) => {
         console.warn('Unable to insert compose draft into active field', error);
       });
-  }, [composeOutput]);
+  }, [composeDraft, composeRawPreview]);
 
   useEffect(() => {
     void (async () => {
       const onboarding = await readOnboardingState();
       setOnboardingDismissed(onboarding.microphoneAccepted);
     })();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    setDirectInsertEnabled(false);
+
+    chrome.runtime
+      ?.sendMessage({ type: 'ekko/direct-insert/query' } satisfies EkkoMessage)
+      .then((response: EkkoResponse | undefined) => {
+        if (cancelled || !response || !response.ok || !response.data) {
+          return;
+        }
+        const enabled = !!(response.data as { enabled?: boolean }).enabled;
+        setDirectInsertEnabled(enabled);
+      })
+      .catch(() => {
+        /* ignore: we will rely on initialized event */
+      });
+
+    const handleInitMessage = (message: EkkoMessage) => {
+      if (message.type === 'ekko/direct-insert/initialized' && !cancelled) {
+        const enabled = !!message.payload?.enabled;
+        setDirectInsertEnabled(enabled);
+      }
+    };
+
+    chrome.runtime?.onMessage.addListener(handleInitMessage);
+
+    return () => {
+      cancelled = true;
+      chrome.runtime?.onMessage.removeListener(handleInitMessage);
+    };
   }, []);
 
   useEffect(() => {
@@ -1529,9 +1643,26 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
               Draft Output
             </h2>
             <div className="compose-output">
-              {composeStreamValue ? (
+              {composeHasOutput ? (
                 <div className="compose-output__scroll">
-                  <p className="compose-output__text">{composeStreamValue}</p>
+                  {composeSubject && (
+                    <p className="compose-output__subject" aria-label="Suggested subject">
+                      {composeSubject}
+                    </p>
+                  )}
+                  {composeParagraphs.length > 0
+                    ? composeParagraphs.map((paragraph, index) => (
+                        <p key={`compose-paragraph-${index}`} className="compose-output__text">
+                          {paragraph}
+                        </p>
+                      ))
+                    : (
+                        <p className="compose-output__text">{composeContent}</p>
+                      )}
+                </div>
+              ) : composeDisplayText ? (
+                <div className="compose-output__scroll">
+                  <p className="compose-output__text">{composeDisplayText}</p>
                 </div>
               ) : (
                 <p className="compose-output__placeholder">
@@ -1540,13 +1671,13 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
               )}
             </div>
             <div className="compose-actions" role="toolbar" aria-label="Compose actions">
-              <button type="button" className="button" disabled={!composeOutput} onClick={handleCopyCompose}>
+              <button type="button" className="button" disabled={!composeHasOutput} onClick={handleCopyCompose}>
                 Copy
               </button>
               <button
                 type="button"
                 className="button button--primary"
-                disabled={!composeOutput}
+                disabled={!composeHasOutput}
                 onClick={handleInsertCompose}
               >
                 Insert into page
@@ -1631,7 +1762,9 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
                       <strong className="history-item__summary-label">
                         Compose ({entry.compose.presetLabel}):
                       </strong>{' '}
-                      {entry.compose.output}
+                      {entry.compose.paragraphs && entry.compose.paragraphs.length > 0
+                        ? joinParagraphs(entry.compose.paragraphs)
+                        : entry.compose.output}
                     </p>
                   )}
                 </div>

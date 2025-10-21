@@ -15,6 +15,13 @@ import {
   type EkkoSettingsChange
 } from '@shared/settings';
 import { composeFromAudio } from '@shared/ai/prompt';
+import {
+  ComposeDraftResult,
+  coerceComposeDraft,
+  composeDraftToClipboardText,
+  deriveParagraphs,
+  joinParagraphs
+} from '@shared/compose';
 
 const WIDGET_DEFAULT_COMPOSE_PROMPT =
   'You are Ekko, an on-device assistant. Listen carefully and give a direct, helpful answer that the user can use immediately. Reply in the user’s language, stay concise, and do not add meta commentary or extra instructions.';
@@ -68,11 +75,14 @@ if (window.top !== window.self) {
   let transcribeOutputPlaceholder: HTMLParagraphElement | null = null;
   let transcribeOutputText: HTMLParagraphElement | null = null;
   let transcribeOutputValue = '';
+  let lastLoggedWidgetTranscript = '';
   let composeOutputCard: HTMLDivElement | null = null;
   let composeOutputScroll: HTMLDivElement | null = null;
   let composeOutputPlaceholder: HTMLParagraphElement | null = null;
+  let composeOutputSubject: HTMLParagraphElement | null = null;
   let composeOutputText: HTMLParagraphElement | null = null;
-  let composeOutputValue = '';
+  let composeOutputValue: ComposeDraftResult | null = null;
+  let composeOutputMessage: string | null = null;
 
   let root: HTMLDivElement | null = null;
   let triggerButton: HTMLButtonElement | null = null;
@@ -84,7 +94,7 @@ if (window.top !== window.self) {
   let statusLabel: HTMLSpanElement | null = null;
   let timerLabel: HTMLSpanElement | null = null;
   let modeButtons: { transcribe: HTMLButtonElement; compose: HTMLButtonElement } | null = null;
-  let directInsertEnabled = true;
+  let directInsertEnabled = false;
 
   function ensureStyle() {
     if (document.getElementById('ekko-floating-widget-style')) return;
@@ -236,6 +246,12 @@ if (window.top !== window.self) {
         width: 100%;
         box-sizing: border-box;
       }
+      .ekko-output__subject {
+        margin: 0 0 6px;
+        font-weight: 600;
+        color: #404072;
+        font-size: 0.8rem;
+      }
       .ekko-output__text {
         margin: 0;
         font-size: 0.82rem;
@@ -289,6 +305,9 @@ if (window.top !== window.self) {
     if (message.type === 'ekko/direct-insert/toggle') {
       const enabled = !!(message.payload as { enabled?: boolean }).enabled;
       setDirectInsertState(enabled);
+    } else if (message.type === 'ekko/direct-insert/initialized') {
+      const enabled = !!(message.payload as { enabled?: boolean }).enabled;
+      setDirectInsertState(enabled);
     }
   }
 
@@ -304,38 +323,71 @@ if (window.top !== window.self) {
     }
   }
 
-  async function composeWidgetAudio(audioBuffer: ArrayBuffer): Promise<string> {
+  async function composeWidgetAudio(audioBuffer: ArrayBuffer): Promise<ComposeDraftResult> {
     const instruction = settings.composePrompt.trim();
     console.info('[Ekko] widget instruction:', instruction);
     const browserLang = typeof navigator !== 'undefined' ? navigator.language : 'en';
     const baseLang = browserLang?.split('-')[0]?.toLowerCase() ?? 'en';
     const supportedLanguages = ['en', 'es', 'ja'];
     const outputLanguage = supportedLanguages.includes(baseLang) ? baseLang : 'en';
-    let lastChunk = '';
+    let lastDraft: ComposeDraftResult | null = null;
     const systemPrompt = instruction
       ? `${WIDGET_DEFAULT_COMPOSE_PROMPT}\n\nFollow these additional instructions exactly:\n${instruction}`
       : WIDGET_DEFAULT_COMPOSE_PROMPT;
 
-    const text = await composeFromAudio({
+    const draft = await composeFromAudio({
       audio: audioBuffer,
       systemPrompt,
       instruction: instruction ? instruction : undefined,
       outputLanguage,
       onChunk: (chunk) => {
-        lastChunk = chunk.trim();
-        if (lastChunk) {
-          setStatus(lastChunk);
+        const parsed = coerceComposeDraft(chunk);
+        if (parsed) {
+          lastDraft = parsed;
+          setComposeOutput(parsed);
+          if (parsed.content) {
+            setStatus(parsed.content);
+          }
         }
       }
     });
-    return text.trim();
+
+    const normalizedParagraphs =
+      draft.paragraphs && draft.paragraphs.length > 0 ? draft.paragraphs : deriveParagraphs(draft.content);
+    const normalized: ComposeDraftResult = {
+      raw: draft.raw,
+      content: joinParagraphs(normalizedParagraphs).trim(),
+      subject: draft.subject && draft.subject.trim().length > 0 ? draft.subject.trim() : undefined,
+      paragraphs: normalizedParagraphs
+    };
+
+    if (!normalized.content && lastDraft) {
+      const fallbackParagraphs =
+        lastDraft.paragraphs && lastDraft.paragraphs.length > 0
+          ? lastDraft.paragraphs
+          : deriveParagraphs(lastDraft.content);
+      return {
+        raw: lastDraft.raw,
+        content: joinParagraphs(fallbackParagraphs).trim(),
+        subject: lastDraft.subject && lastDraft.subject.trim().length > 0 ? lastDraft.subject.trim() : undefined,
+        paragraphs: fallbackParagraphs
+      };
+    }
+
+    return normalized;
   }
 
-  async function insertComposeText(text: string) {
+  async function insertComposeDraft(draft: ComposeDraftResult) {
     const response = await chrome.runtime
       .sendMessage({
         type: 'ekko/widget/insert',
-        payload: { text }
+        payload: {
+          draft: {
+            content: draft.content,
+            subject: draft.subject,
+            paragraphs: draft.paragraphs
+          }
+        }
       } satisfies EkkoMessage)
       .catch((error) => {
         console.warn('Unable to insert compose output', error);
@@ -361,15 +413,15 @@ if (window.top !== window.self) {
     }
   }
 
-  async function deliverComposeOutput(text: string): Promise<boolean> {
-    if (!text) {
+  async function deliverComposeOutput(draft: ComposeDraftResult | null): Promise<boolean> {
+    if (!draft || !draft.content.trim()) {
       setComposeOutput(null);
       setComposeOutput('Compose returned no response.');
       setStatus('Compose returned no response.');
       return false;
     }
 
-    setComposeOutput(text);
+    setComposeOutput(draft);
 
     if (!directInsertEnabled) {
       setStatus('');
@@ -377,11 +429,11 @@ if (window.top !== window.self) {
     }
 
     try {
-      await insertComposeText(text);
+      await insertComposeDraft(draft);
       setStatus('Draft inserted into page.');
       return true;
     } catch (error) {
-      const copied = await copyToClipboard(text);
+      const copied = await copyToClipboard(composeDraftToClipboardText(draft));
       if (copied) {
         setStatus('Output copied to clipboard.');
         return true;
@@ -486,6 +538,11 @@ if (window.top !== window.self) {
     composeOutputScroll = document.createElement('div');
     composeOutputScroll.className = 'ekko-output__scroll';
     composeOutputScroll.style.display = 'none';
+
+    composeOutputSubject = document.createElement('p');
+    composeOutputSubject.className = 'ekko-output__subject';
+    composeOutputSubject.style.display = 'none';
+    composeOutputScroll.appendChild(composeOutputSubject);
 
     composeOutputText = document.createElement('p');
     composeOutputText.className = 'ekko-output__text';
@@ -657,28 +714,46 @@ if (window.top !== window.self) {
     const visible = settings.mode === 'compose';
     composeOutputCard.style.display = visible ? 'flex' : 'none';
     if (!visible) return;
-    const hasText = composeOutputValue.length > 0;
+    const draft = composeOutputValue;
+    const message = composeOutputMessage?.trim() ?? '';
+    const hasDraft = !!draft && draft.content.trim().length > 0;
+    const hasMessage = !hasDraft && message.length > 0;
     if (composeOutputScroll) {
-      composeOutputScroll.style.display = hasText ? 'block' : 'none';
+      composeOutputScroll.style.display = hasDraft || hasMessage ? 'block' : 'none';
     }
     if (composeOutputPlaceholder) {
-      composeOutputPlaceholder.style.display = hasText ? 'none' : 'block';
+      composeOutputPlaceholder.style.display = hasDraft || hasMessage ? 'none' : 'block';
+    }
+    if (composeOutputSubject) {
+      const subject = hasDraft && draft.subject ? draft.subject : '';
+      composeOutputSubject.textContent = subject;
+      composeOutputSubject.style.display = subject ? 'block' : 'none';
     }
     if (composeOutputText) {
-      composeOutputText.textContent = composeOutputValue;
+      composeOutputText.textContent = hasDraft ? draft.content : hasMessage ? message : '';
     }
   }
 
-  function setComposeOutput(text: string | null) {
-    composeOutputValue = text && text.trim() ? text.trim() : '';
-    if (composeOutputText) {
-      composeOutputText.textContent = composeOutputValue;
-    }
-    if (composeOutputScroll) {
-      composeOutputScroll.style.display = composeOutputValue ? 'block' : 'none';
-    }
-    if (composeOutputPlaceholder) {
-      composeOutputPlaceholder.style.display = composeOutputValue ? 'none' : 'block';
+  function setComposeOutput(value: ComposeDraftResult | string | null) {
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      composeOutputValue = null;
+      composeOutputMessage = trimmed || null;
+    } else if (value) {
+      const normalizedParagraphs =
+        value.paragraphs && value.paragraphs.length > 0
+          ? value.paragraphs
+          : deriveParagraphs(value.content);
+      composeOutputValue = {
+        raw: value.raw,
+        content: joinParagraphs(normalizedParagraphs).trim(),
+        subject: value.subject && value.subject.trim().length > 0 ? value.subject.trim() : undefined,
+        paragraphs: normalizedParagraphs
+      };
+      composeOutputMessage = null;
+    } else {
+      composeOutputValue = null;
+      composeOutputMessage = null;
     }
     updateComposeOutputVisibility();
   }
@@ -768,12 +843,17 @@ if (window.top !== window.self) {
 
     recognition.onresult = (event) => {
       transcribeInterim = '';
+      let lastConfidence: number | null = null;
       for (let i = event.resultIndex; i < event.results.length; i += 1) {
         const result = event.results[i];
         const transcript = result[0]?.transcript ?? '';
         if (!transcript) continue;
         if (result.isFinal) {
           transcribeFinal += `${transcribeFinal ? ' ' : ''}${transcript.trim()}`;
+          const confidence = result[0]?.confidence;
+          if (typeof confidence === 'number') {
+            lastConfidence = confidence;
+          }
         } else {
           transcribeInterim += transcript;
         }
@@ -787,6 +867,15 @@ if (window.top !== window.self) {
       const finalText = transcribeFinal.trim();
       const combined = interim ? `${finalText}${finalText ? ' ' : ''}${interim}`.trim() : finalText;
       setTranscribeOutput(combined || null);
+      if (finalText && finalText !== lastLoggedWidgetTranscript) {
+        const confidenceOutput =
+          typeof lastConfidence === 'number' ? Number(lastConfidence.toFixed(3)) : undefined;
+        console.info('[Ekko] Widget speech recognition final result', {
+          transcript: finalText,
+          confidence: confidenceOutput
+        });
+        lastLoggedWidgetTranscript = finalText;
+      }
     };
 
     recognition.onerror = (event) => {
@@ -907,8 +996,8 @@ if (window.top !== window.self) {
         const buffer = await blob.arrayBuffer();
         lastComposeAudio = buffer.slice(0);
         setStatus('Generating…');
-        const text = await composeWidgetAudio(buffer);
-        const delivered = await deliverComposeOutput(text);
+        const draft = await composeWidgetAudio(buffer);
+        const delivered = await deliverComposeOutput(draft);
         if (delivered) {
           hasComposeRecording = true;
         }
@@ -1035,8 +1124,8 @@ if (window.top !== window.self) {
 
     try {
       await queryDirectInsertState();
-      const text = await composeWidgetAudio(audioBuffer);
-      const delivered = await deliverComposeOutput(text);
+      const draft = await composeWidgetAudio(audioBuffer);
+      const delivered = await deliverComposeOutput(draft);
       if (delivered) {
         hasComposeRecording = true;
       }

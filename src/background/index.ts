@@ -1,7 +1,9 @@
-import { EkkoMessage, EkkoResponse } from '@shared/messages';
+import { DirectInsertPayload, EkkoMessage, EkkoResponse } from '@shared/messages';
+import { ComposeDraftFields, deriveParagraphs, joinParagraphs } from '@shared/compose';
 import { listSessions, upsertTranscript } from '@shared/storage';
 const DIRECT_INSERT_SCRIPT_ID = 'ekko-direct-insert-script';
-let directInsertEnabled = false;
+const DIRECT_INSERT_STORAGE_KEY = 'ekko:directInsertEnabled';
+let directInsertEnabled = true;
 const directInsertFrameMap = new Map<number, number>();
 const sidePanelState = new Map<string, boolean>();
 const SIDE_PANEL_STATE_KEY = 'ekko:sidepanel:state';
@@ -208,10 +210,6 @@ async function disableSidePanelForTab(tabId: number): Promise<void> {
 
 async function toggleDirectInsert(enabled: boolean) {
   const tabId = await getActiveTabId();
-  if (tabId === undefined) {
-    throw new Error('No active tab for direct insert bridge');
-  }
-
   if (enabled) {
     await chrome.scripting.unregisterContentScripts({ ids: [DIRECT_INSERT_SCRIPT_ID] }).catch(() => {
       /* noop: script not yet registered */
@@ -228,20 +226,40 @@ async function toggleDirectInsert(enabled: boolean) {
       }
     ]);
 
-    await chrome.scripting.executeScript({
-      target: { tabId, allFrames: true },
-      files: ['content/directInsert.js']
-    }).catch(() => {
-      /* Script may already be injected */
-    });
+    if (tabId !== undefined) {
+      await chrome.scripting
+        .executeScript({
+          target: { tabId, allFrames: true },
+          files: ['content/directInsert.js']
+        })
+        .catch(() => {
+          /* Script may already be injected */
+        });
+    }
   } else {
     await chrome.scripting.unregisterContentScripts({ ids: [DIRECT_INSERT_SCRIPT_ID] }).catch(() => {
       /* noop */
     });
-    directInsertFrameMap.delete(tabId);
+    if (tabId !== undefined) {
+      directInsertFrameMap.delete(tabId);
+    }
   }
 
   directInsertEnabled = enabled;
+
+  if (chrome.storage?.local) {
+    chrome.storage.local.set({ [DIRECT_INSERT_STORAGE_KEY]: enabled }).catch(() => {
+      /* ignore persistence errors */
+    });
+  }
+
+  await broadcastDirectInsertState(enabled).catch(() => {
+    /* ignore */
+  });
+
+  if (tabId === undefined) {
+    return;
+  }
 
   const broadcastToggle = async (frameId?: number) => {
     const options = typeof frameId === 'number' ? { frameId } : undefined;
@@ -353,17 +371,72 @@ async function handleRewriteUpdate(message: Extract<EkkoMessage, { type: 'ekko/a
   return session;
 }
 
+function sanitizeParagraphArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) =>
+      typeof entry === 'string'
+        ? entry
+            .replace(/\r\n?/g, '\n')
+            .replace(/[ \t]+$/gm, '')
+            .replace(/^\n+|\n+$/g, '')
+        : ''
+    )
+    .filter((entry) => entry.length > 0);
+}
+
 async function handleComposeUpdate(message: Extract<EkkoMessage, { type: 'ekko/ai/compose' }>) {
   const sessions = await listSessions();
   const target = message.payload.sessionId
     ? sessions.find((entry) => entry.id === message.payload.sessionId)
     : undefined;
 
+  const output = message.payload.output;
+  let content: string;
+  let subject: string | undefined;
+  let raw: string | undefined;
+  let paragraphs: string[] | undefined;
+
+  if (typeof output === 'string') {
+    content = output.trim();
+    subject = undefined;
+    raw = output;
+    paragraphs = deriveParagraphs(content);
+  } else {
+    content = typeof output.content === 'string' ? output.content.trim() : '';
+    subject =
+      typeof output.subject === 'string' && output.subject.trim().length > 0
+        ? output.subject.trim()
+        : undefined;
+    raw = typeof output.raw === 'string' ? output.raw : undefined;
+    const providedParagraphs = sanitizeParagraphArray(output.paragraphs);
+    if (providedParagraphs.length > 0 && content) {
+      const joined = joinParagraphs(providedParagraphs);
+      paragraphs = joined.trim() === content.trim() ? providedParagraphs : deriveParagraphs(content);
+    } else if (providedParagraphs.length > 0) {
+      paragraphs = providedParagraphs;
+    } else {
+      paragraphs = deriveParagraphs(content);
+    }
+  }
+
+  const formattedParagraphs = paragraphs ?? deriveParagraphs(content);
+  const formattedContent = joinParagraphs(formattedParagraphs);
+  if (!formattedContent.trim()) {
+    throw new Error('Compose output is empty.');
+  }
+  content = formattedContent;
+
   const compositionEntry = {
     id: crypto.randomUUID(),
     preset: message.payload.preset,
     instructions: message.payload.instructions,
-    content: message.payload.output,
+    content: formattedContent,
+    subject,
+    raw,
+    paragraphs: formattedParagraphs,
     createdAt: Date.now()
   } as const;
 
@@ -372,7 +445,7 @@ async function handleComposeUpdate(message: Extract<EkkoMessage, { type: 'ekko/a
     ? [compositionEntry, ...target.compositions]
     : [compositionEntry];
 
-  const session = await upsertTranscript(message.payload.output, {
+  const session = await upsertTranscript(formattedContent, {
     id: sessionId,
     compositions,
     summary: target?.summary,
@@ -384,7 +457,45 @@ async function handleComposeUpdate(message: Extract<EkkoMessage, { type: 'ekko/a
   return session;
 }
 
-async function applyDirectInsertText(text: string, tabIdOverride?: number) {
+async function applyDirectInsertPayload(payload: DirectInsertPayload, tabIdOverride?: number) {
+  let normalizedDraft: ComposeDraftFields;
+  let normalizedText: string;
+
+  if (payload.draft) {
+    const rawContent = typeof payload.draft.content === 'string' ? payload.draft.content.trim() : '';
+    if (!rawContent) {
+      throw new Error('Draft content is empty.');
+    }
+    const subject =
+      typeof payload.draft.subject === 'string' && payload.draft.subject.trim().length > 0
+        ? payload.draft.subject.trim()
+        : undefined;
+    const providedParagraphs = sanitizeParagraphArray(payload.draft.paragraphs);
+    const resolvedParagraphs =
+      providedParagraphs.length > 0 && joinParagraphs(providedParagraphs).trim() === rawContent.trim()
+        ? providedParagraphs
+        : deriveParagraphs(rawContent);
+    const content = joinParagraphs(resolvedParagraphs);
+
+    normalizedDraft = { content, subject, paragraphs: resolvedParagraphs };
+    normalizedText = content;
+  } else {
+    const rawContent = (payload.text ?? '').trim();
+    if (!rawContent) {
+      throw new Error('Draft content is empty.');
+    }
+    const paragraphs = deriveParagraphs(rawContent);
+    const content = joinParagraphs(paragraphs);
+
+    normalizedDraft = { content, paragraphs };
+    normalizedText = content;
+  }
+
+  const messagePayload: DirectInsertPayload = {
+    draft: normalizedDraft,
+    text: normalizedText
+  };
+
   const tabId = tabIdOverride ?? (await getActiveTabId());
   if (tabId === undefined) {
     throw new Error('No active tab for direct insert.');
@@ -393,7 +504,7 @@ async function applyDirectInsertText(text: string, tabIdOverride?: number) {
   const sendApplyMessage = () => {
     const message = {
       type: 'ekko/direct-insert/apply',
-      payload: { text }
+      payload: messagePayload
     } satisfies EkkoMessage;
 
     const frameId = directInsertFrameMap.get(tabId);
@@ -405,6 +516,7 @@ async function applyDirectInsertText(text: string, tabIdOverride?: number) {
 
   try {
     await sendApplyMessage();
+    await ensureDomInsertion(tabId, normalizedDraft);
   } catch (error) {
     try {
       await chrome.scripting.executeScript({
@@ -412,9 +524,156 @@ async function applyDirectInsertText(text: string, tabIdOverride?: number) {
         files: ['content/directInsert.js']
       });
       await sendApplyMessage();
+      await ensureDomInsertion(tabId, normalizedDraft);
     } catch (secondaryError) {
       console.warn('Unable to apply direct insert text', secondaryError);
     }
+  }
+}
+
+async function ensureDomInsertion(tabId: number, draft: ComposeDraftFields) {
+  if (!draft.subject && !draft.content) {
+    return;
+  }
+
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      func: (payload: ComposeDraftFields) => {
+        try {
+          const applySubject = () => {
+            if (!payload.subject) {
+              return;
+            }
+            const subjectSelectors = [
+              'input[aria-label*="subject" i]',
+              'input[name*="subject" i]',
+              'textarea[aria-label*="subject" i]',
+              'textarea[name*="subject" i]'
+            ];
+            for (const selector of subjectSelectors) {
+              const element = document.querySelector(selector);
+              if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+                const current = element.value.trim();
+                if (current === payload.subject.trim()) {
+                  return;
+                }
+                try {
+                  element.focus({ preventScroll: true });
+                } catch {
+                  element.focus();
+                }
+                element.value = payload.subject;
+                element.dispatchEvent(new Event('input', { bubbles: true }));
+                return;
+              }
+            }
+          };
+
+          const applyBody = () => {
+            if (!payload.content) {
+              return;
+            }
+            const selectors = [
+              '[aria-label*="message body" i]',
+              '[aria-label*="email body" i]',
+              '[aria-label*="compose" i]',
+              '[role="textbox"][contenteditable="true"]',
+              '[contenteditable="true"]'
+            ];
+            let body: HTMLElement | null = null;
+            for (const selector of selectors) {
+              const element = document.querySelector(selector);
+              if (element instanceof HTMLElement && element.isContentEditable) {
+                body = element;
+                break;
+              }
+            }
+            if (!body) {
+              return;
+            }
+            const compare = (value: string) => value.replace(/\s+/g, ' ').trim();
+            const current = compare(body.innerText);
+            const target = compare(payload.content);
+            if (current === target) {
+              return;
+            }
+            try {
+              body.focus({ preventScroll: true });
+            } catch {
+              body.focus();
+            }
+            body.innerHTML = '';
+            const doc = body.ownerDocument;
+            const paragraphs = payload.content.replace(/\r/g, '').split(/\n{2,}/);
+            paragraphs.forEach((paragraph, index) => {
+              const div = doc.createElement('div');
+              const lines = paragraph.split('\n');
+              lines.forEach((line, lineIndex) => {
+                if (lineIndex > 0) {
+                  div.appendChild(doc.createElement('br'));
+                }
+                div.appendChild(doc.createTextNode(line));
+              });
+              body?.appendChild(div);
+              if (index < paragraphs.length - 1) {
+                body?.appendChild(doc.createElement('br'));
+              }
+            });
+            body.dispatchEvent(new Event('input', { bubbles: true }));
+          };
+
+          applySubject();
+          applyBody();
+        } catch (injectionError) {
+          console.warn('[Ekko] Direct insert DOM fallback failed', injectionError);
+        }
+      },
+      args: [draft]
+    });
+  } catch (error) {
+    console.warn('Unable to run direct insert DOM fallback', error);
+  }
+}
+
+void initializeDirectInsertState();
+
+async function initializeDirectInsertState() {
+  if (!chrome.storage?.local) {
+    if (directInsertEnabled) {
+      await toggleDirectInsert(true).catch((error) => {
+        console.warn('Unable to enable direct insert on init', error);
+      });
+    }
+    return;
+  }
+
+  try {
+    const record = await chrome.storage.local.get(DIRECT_INSERT_STORAGE_KEY);
+    const stored = record[DIRECT_INSERT_STORAGE_KEY];
+    if (typeof stored === 'boolean') {
+      directInsertEnabled = stored;
+    } else {
+      directInsertEnabled = true;
+      await chrome.storage.local.set({ [DIRECT_INSERT_STORAGE_KEY]: true });
+    }
+
+    await toggleDirectInsert(directInsertEnabled).catch((error) => {
+      console.warn('Unable to apply stored direct insert state', error);
+    });
+  } catch (error) {
+    console.warn('Unable to read direct insert state', error);
+  }
+}
+
+async function broadcastDirectInsertState(enabled: boolean) {
+  try {
+    await chrome.runtime.sendMessage({
+      type: 'ekko/direct-insert/initialized',
+      payload: { enabled }
+    } satisfies EkkoMessage);
+  } catch {
+    /* ignore */
   }
 }
 
@@ -597,11 +856,10 @@ chrome.runtime.onMessage.addListener((message: EkkoMessage, sender, sendResponse
             break;
           }
           try {
-            if (!message.payload || typeof message.payload !== 'object' || typeof (message.payload as { text?: string }).text !== 'string') {
-              throw new Error('Missing text payload.');
+            if (!message.payload) {
+              throw new Error('Missing draft payload.');
             }
-            const text = (message.payload as { text: string }).text;
-            await applyDirectInsertText(text, tabId);
+            await applyDirectInsertPayload(message.payload, tabId);
             sendResponse({ ok: true } satisfies EkkoResponse);
           } catch (error) {
             console.warn('Widget insert failed', error);
@@ -637,7 +895,7 @@ chrome.runtime.onMessage.addListener((message: EkkoMessage, sender, sendResponse
           break;
         }
         case 'ekko/direct-insert/apply': {
-          await applyDirectInsertText(message.payload.text);
+          await applyDirectInsertPayload(message.payload);
           sendResponse({ ok: true } satisfies EkkoResponse);
           break;
         }

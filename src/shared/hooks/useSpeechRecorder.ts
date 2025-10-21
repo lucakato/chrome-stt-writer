@@ -29,6 +29,7 @@ export function useSpeechRecorder({
   const recognitionRef = useRef<SpeechRecognitionInstance>(null);
   const timerRef = useRef<number | null>(null);
   const languageRef = useRef(language);
+  const lastLoggedTranscriptRef = useRef<string>('');
 
   const isSupported = useMemo(() => status !== 'unsupported', [status]);
   const isListening = status === 'listening';
@@ -101,6 +102,7 @@ export function useSpeechRecorder({
       recognition.onresult = (event: SpeechRecognitionEvent) => {
         let interim = '';
         let finalText = '';
+        let lastConfidence: number | null = null;
 
         for (let i = event.resultIndex; i < event.results.length; i += 1) {
           const result = event.results[i];
@@ -108,6 +110,10 @@ export function useSpeechRecorder({
           if (!transcript) continue;
           if (result.isFinal) {
             finalText += transcript;
+            const confidence = result[0]?.confidence;
+            if (typeof confidence === 'number') {
+              lastConfidence = confidence;
+            }
           } else {
             interim += transcript;
           }
@@ -123,6 +129,17 @@ export function useSpeechRecorder({
           const normalized = finalText.trim();
           onFinalResult?.(normalized);
           onSegmentCaptured?.(normalized);
+          if (normalized && normalized !== lastLoggedTranscriptRef.current) {
+            const confidenceOutput =
+              typeof lastConfidence === 'number'
+                ? Number(lastConfidence.toFixed(3))
+                : undefined;
+            console.info('[Ekko] Speech recognition final result', {
+              transcript: normalized,
+              confidence: confidenceOutput
+            });
+            lastLoggedTranscriptRef.current = normalized;
+          }
           setInterimTranscript('');
         }
       };

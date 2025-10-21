@@ -1,3 +1,10 @@
+import {
+  COMPOSE_RESPONSE_SCHEMA,
+  ComposeDraftResult,
+  coerceComposeDraft,
+  createFallbackDraft
+} from '@shared/compose';
+
 type PromptProvider = 'chrome' | 'standard';
 
 export type PromptAvailabilityStatus = 'unsupported' | 'unavailable' | 'downloadable' | 'ready' | 'error';
@@ -38,6 +45,8 @@ export type ComposeFromAudioRequest = {
   signal?: AbortSignal;
   session?: LanguageModelSession | null;
   monitor?: (monitor: LanguageModelMonitor) => void;
+  responseConstraint?: Record<string, unknown>;
+  omitResponseConstraintInput?: boolean;
 };
 
 type DetectedLanguageModel = {
@@ -175,6 +184,27 @@ function extractChunkText(chunk: LanguageModelStreamingChunk): string {
   return '';
 }
 
+function extractPromptResultPayload(result: LanguageModelPromptResult | null | undefined): unknown {
+  if (!result) {
+    return undefined;
+  }
+  if (typeof result.output !== 'undefined') {
+    return result.output;
+  }
+  if (typeof result.response !== 'undefined') {
+    return result.response;
+  }
+  if (Array.isArray(result.candidates) && result.candidates.length > 0) {
+    const candidate = result.candidates.find(
+      (entry) => typeof entry.content === 'string' && entry.content.trim().length > 0
+    );
+    if (candidate) {
+      return candidate.content;
+    }
+  }
+  return undefined;
+}
+
 function normalizeSessionInputs({
   expectedInputs,
   expectedOutputs,
@@ -277,6 +307,9 @@ export async function createPromptSession(options: PromptSessionOptions = {}): P
   }
 }
 
+const COMPOSE_STRUCTURED_GUIDANCE =
+  'Populate the JSON response fields exactly as follows: `subject` must always be a concise subject line (never omit it—craft one even if the user does not mention it). `paragraphs` must be an ordered array covering greeting, body sections, sign-off, and signature as separate entries with no blank strings. `content` must join those paragraphs using double newline characters so each appears on its own line when inserted. Do not include meta commentary or any fields outside this schema.';
+
 export async function composeFromAudio({
   audio,
   systemPrompt,
@@ -290,8 +323,10 @@ export async function composeFromAudio({
   onStatusChange,
   signal,
   session,
-  monitor
-}: ComposeFromAudioRequest): Promise<string> {
+  monitor,
+  responseConstraint,
+  omitResponseConstraintInput
+}: ComposeFromAudioRequest): Promise<ComposeDraftResult> {
   const detection = detectLanguageModel();
   if (!detection) {
     throw new Error('Prompt API is not available in this browser.');
@@ -328,10 +363,15 @@ export async function composeFromAudio({
     }
     userContent.push({ type: 'audio', value: audio });
 
+    const structuredSystemPrompt = [systemPrompt, COMPOSE_STRUCTURED_GUIDANCE]
+      .map((segment) => (typeof segment === 'string' ? segment.trim() : ''))
+      .filter((segment) => segment.length > 0)
+      .join('\n\n');
+
     const messages: PromptMessage[] = [
       {
         role: 'system',
-        content: [{ type: 'text', value: systemPrompt }]
+        content: [{ type: 'text', value: structuredSystemPrompt }]
       },
       {
         role: 'user',
@@ -339,9 +379,18 @@ export async function composeFromAudio({
       }
     ];
 
+    const constraint = responseConstraint ?? COMPOSE_RESPONSE_SCHEMA;
+    const promptOptions: LanguageModelPromptOptions = {
+      signal,
+      responseConstraint: constraint,
+      omitResponseConstraintInput: omitResponseConstraintInput ?? true
+    };
+
+    let fallbackRaw = '';
+
     if (typeof resolvedSession.promptStreaming === 'function') {
       try {
-        const stream = resolvedSession.promptStreaming(messages, { signal });
+        const stream = resolvedSession.promptStreaming(messages, promptOptions);
         let aggregated = '';
         for await (const chunk of stream) {
           const piece = extractChunkText(chunk);
@@ -349,11 +398,27 @@ export async function composeFromAudio({
             continue;
           }
           aggregated += piece;
+          fallbackRaw = aggregated;
           onChunk?.(aggregated);
         }
 
         if (aggregated.trim().length > 0) {
-          return aggregated;
+          const draft = coerceComposeDraft(aggregated);
+          if (draft) {
+            console.info('[Ekko] Prompt API structured compose result (streaming)', {
+              draft,
+              raw: aggregated
+            });
+            onChunk?.(draft.content);
+            return draft;
+          }
+          const fallbackDraft = createFallbackDraft(aggregated);
+          console.info('[Ekko] Prompt API compose fallback (streaming aggregate)', {
+            draft: fallbackDraft,
+            raw: aggregated
+          });
+          onChunk?.(fallbackDraft.content);
+          return fallbackDraft;
         }
       } catch (streamError) {
         if (streamError instanceof DOMException && streamError.name === 'AbortError') {
@@ -363,24 +428,38 @@ export async function composeFromAudio({
       }
     }
 
-    const result = await resolvedSession.prompt(messages, { signal });
+    const result = await resolvedSession.prompt(messages, promptOptions);
+    const payload = extractPromptResultPayload(result);
 
-    if (result) {
-      if (typeof result.output === 'string' && result.output.trim()) {
-        onChunk?.(result.output);
-        return result.output;
+    if (typeof payload !== 'undefined') {
+      const rawString = typeof payload === 'string' ? payload : JSON.stringify(payload);
+      fallbackRaw = rawString;
+      const draft = coerceComposeDraft(payload);
+      if (draft) {
+        console.info('[Ekko] Prompt API structured compose result', { draft, raw: rawString });
+        onChunk?.(draft.content);
+        return draft;
       }
-      if (typeof result.response === 'string' && result.response.trim()) {
-        onChunk?.(result.response);
-        return result.response;
+
+      if (typeof payload === 'string' && payload.trim().length > 0) {
+        const fallbackDraft = createFallbackDraft(payload);
+        console.info('[Ekko] Prompt API compose fallback (string payload)', {
+          payload,
+          draft: fallbackDraft
+        });
+        onChunk?.(fallbackDraft.content);
+        return fallbackDraft;
       }
-      if (Array.isArray(result.candidates) && result.candidates.length > 0) {
-        const candidate = result.candidates.find((entry) => entry.content.trim().length > 0);
-        if (candidate) {
-          onChunk?.(candidate.content);
-          return candidate.content;
-        }
-      }
+    }
+
+    if (fallbackRaw.trim().length > 0) {
+      const fallbackDraft = createFallbackDraft(fallbackRaw);
+      console.info('[Ekko] Prompt API compose fallback (aggregated raw)', {
+        raw: fallbackRaw,
+        draft: fallbackDraft
+      });
+      onChunk?.(fallbackDraft.content);
+      return fallbackDraft;
     }
 
     throw new Error('Prompt API returned an empty response.');

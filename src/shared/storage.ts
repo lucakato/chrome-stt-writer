@@ -17,6 +17,9 @@ export type TranscriptSession = {
     preset: string;
     instructions?: string;
     content: string;
+    subject?: string;
+    raw?: string;
+    paragraphs?: string[];
     createdAt: number;
   }>;
   actions: TranscriptAction[];

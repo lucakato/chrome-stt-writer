@@ -41,6 +41,12 @@ declare global {
     languages?: string[];
   }
 
+  interface LanguageModelPromptOptions {
+    signal?: AbortSignal;
+    responseConstraint?: Record<string, unknown>;
+    omitResponseConstraintInput?: boolean;
+  }
+
   interface LanguageModelCreateOptions {
     expectedInputs?: LanguageModelModalityDescriptor[];
     expectedOutputs?: LanguageModelModalityDescriptor[];
@@ -73,8 +79,8 @@ declare global {
   }
 
   interface LanguageModelSession {
-    prompt(messages: PromptMessage[], options?: { signal?: AbortSignal }): Promise<LanguageModelPromptResult>;
-    promptStreaming(messages: PromptMessage[], options?: { signal?: AbortSignal }): AsyncIterable<LanguageModelStreamingChunk>;
+    prompt(messages: PromptMessage[], options?: LanguageModelPromptOptions): Promise<LanguageModelPromptResult>;
+    promptStreaming(messages: PromptMessage[], options?: LanguageModelPromptOptions): AsyncIterable<LanguageModelStreamingChunk>;
     append?(messages: PromptMessage[]): Promise<void>;
     destroy?(): void;
     close?(): void;

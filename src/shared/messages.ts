@@ -1,3 +1,12 @@
+import type { ComposeDraftFields } from '@shared/compose';
+
+export type DirectInsertPayload = {
+  text?: string;
+  draft?: ComposeDraftFields;
+};
+
+export type ComposeOutputPayload = ComposeDraftFields & { raw?: string };
+
 export type EkkoMessage =
   | {
       type: 'ekko/direct-insert/toggle';
@@ -35,14 +44,12 @@ export type EkkoMessage =
         sessionId?: string;
         preset: string;
         instructions?: string;
-        output: string;
+        output: ComposeOutputPayload;
       };
     }
   | {
       type: 'ekko/direct-insert/apply';
-      payload: {
-        text: string;
-      };
+      payload: DirectInsertPayload;
     }
   | {
       type: 'ekko/direct-insert/focus';
@@ -51,6 +58,12 @@ export type EkkoMessage =
   | {
       type: 'ekko/direct-insert/query';
       payload?: Record<string, never>;
+    }
+  | {
+      type: 'ekko/direct-insert/initialized';
+      payload?: {
+        enabled: boolean;
+      };
     }
   | {
       type: 'ekko/sidepanel/open';
@@ -69,9 +82,7 @@ export type EkkoMessage =
     }
   | {
       type: 'ekko/widget/insert';
-      payload: {
-        text: string;
-      };
+      payload: DirectInsertPayload;
     };
 
 export type EkkoResponse =
