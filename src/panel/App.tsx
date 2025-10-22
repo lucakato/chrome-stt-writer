@@ -79,7 +79,8 @@ type RewritePresetConfig = {
   length?: string;
 };
 
-const BASE_SHARED_CONTEXT = 'Voice note rewrite to help organize research and meeting insights.';
+const BASE_SHARED_CONTEXT =
+  'You are an AI assistant who is an expert writer. Rewrite the user\'s speech-to-text transcript from the user\'s perspective, improving clarity, grammar, and tone while preserving their intent.';
 const COMPOSE_MAX_DURATION_MS = 90_000;
 
 const rewritePresets: Array<{ id: RewritePreset; label: string }> = [

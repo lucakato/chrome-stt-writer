@@ -61,7 +61,8 @@ type WidgetRewriteConfig = {
   length?: string;
 };
 
-const WIDGET_BASE_SHARED_CONTEXT = 'Voice note rewrite to help organize research and meeting insights.';
+const WIDGET_BASE_SHARED_CONTEXT =
+  'You are an AI assistant who is an expert writer. Rewrite the user\'s speech-to-text transcript from the user\'s perspective, improving clarity, grammar, and tone while preserving their intent.';
 
 const WIDGET_REWRITE_OPTIONS: Array<{
   id: WidgetRewritePreset;
