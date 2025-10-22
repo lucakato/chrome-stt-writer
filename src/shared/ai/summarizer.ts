@@ -16,6 +16,9 @@ export type SummarizeRequest = {
   length?: string;
   format?: string;
   outputLanguage?: string;
+  sharedContext?: string;
+  expectedInputLanguages?: string[];
+  expectedContextLanguages?: string[];
   onDownloadProgress?: (progress: number) => void;
   onStatusChange?: (status: SummarizerAvailabilityStatus) => void;
   onChunk?: (chunk: string) => void;
@@ -154,11 +157,14 @@ function ensureUserActivation() {
   }
 }
 
-async function createSummarizer(
-  onDownloadProgress?: (progress: number) => void,
-  onStatusChange?: (status: SummarizerAvailabilityStatus) => void,
-  outputLanguage?: string
-) {
+async function createSummarizer(options: {
+  onDownloadProgress?: (progress: number) => void;
+  onStatusChange?: (status: SummarizerAvailabilityStatus) => void;
+  outputLanguage?: string;
+  sharedContext?: string;
+  expectedInputLanguages?: string[];
+  expectedContextLanguages?: string[];
+}) {
   const detection = detectSummarizer();
   if (!detection) {
     throw new Error('Summarizer API is not supported in this environment.');
@@ -174,23 +180,26 @@ async function createSummarizer(
 
   ensureUserActivation();
 
-  onStatusChange?.('downloadable');
+  options.onStatusChange?.('downloadable');
 
   creationPromise = detection.api.create({
+    sharedContext: options.sharedContext,
+    expectedInputLanguages: options.expectedInputLanguages,
+    expectedContextLanguages: options.expectedContextLanguages,
+    outputLanguage: options.outputLanguage,
     monitor: (monitor) => {
-      if (!onDownloadProgress) {
+      if (!options.onDownloadProgress) {
         return;
       }
       monitor.addEventListener('downloadprogress', (event: SummarizerDownloadProgressEvent) => {
-        onDownloadProgress(Math.min(Math.max(event.loaded, 0), 1));
+        options.onDownloadProgress?.(Math.min(Math.max(event.loaded, 0), 1));
       });
-    },
-    outputLanguage
+    }
   });
 
   try {
     summarizerInstance = await creationPromise;
-    onStatusChange?.('ready');
+    options.onStatusChange?.('ready');
     return summarizerInstance;
   } finally {
     creationPromise = null;
@@ -222,11 +231,14 @@ export async function summarizeText(options: SummarizeRequest): Promise<Summariz
     throw new Error(availability.message ?? 'Summarizer API is unavailable right now.');
   }
 
-  const summarizer = await createSummarizer(
-    options.onDownloadProgress,
-    options.onStatusChange,
-    options.outputLanguage
-  );
+  const summarizer = await createSummarizer({
+    onDownloadProgress: options.onDownloadProgress,
+    onStatusChange: options.onStatusChange,
+    outputLanguage: options.outputLanguage,
+    sharedContext: options.sharedContext,
+    expectedInputLanguages: options.expectedInputLanguages,
+    expectedContextLanguages: options.expectedContextLanguages
+  });
   const provider = detectSummarizer()?.provider ?? 'standard';
 
   const summarizerOptions = getSummarizerOptions(options);

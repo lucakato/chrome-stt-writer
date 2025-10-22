@@ -4,6 +4,7 @@ import type { IconType } from 'react-icons';
 import { MdKeyboardVoice } from 'react-icons/md';
 import { RiVoiceprintFill } from 'react-icons/ri';
 import { IoSettingsSharp } from 'react-icons/io5';
+import { FiCopy } from 'react-icons/fi';
 import type { EkkoMessage, EkkoResponse } from '@shared/messages';
 import {
   getEkkoSettings,
@@ -15,6 +16,7 @@ import {
   type EkkoSettingsChange
 } from '@shared/settings';
 import { composeFromAudio } from '@shared/ai/prompt';
+import { rewriteText } from '@shared/ai/rewriter';
 import {
   ComposeDraftResult,
   coerceComposeDraft,
@@ -39,8 +41,105 @@ function iconMarkup(icon: IconType): string {
 const ICON_MIC_IDLE = iconMarkup(MdKeyboardVoice);
 const ICON_MIC_RECORDING = iconMarkup(RiVoiceprintFill);
 const ICON_SETTINGS = iconMarkup(IoSettingsSharp);
+const ICON_COPY = iconMarkup(FiCopy);
 const ICON_MIC_PROCESSING = '<span aria-hidden="true">⏳</span>';
 const WIDGET_COMPOSE_MAX_DURATION_MS = 90_000;
+
+type WidgetRewritePreset =
+  | 'concise-formal'
+  | 'expand'
+  | 'casual'
+  | 'bullet'
+  | 'action-items'
+  | 'custom';
+
+type WidgetRewriteConfig = {
+  sharedContext?: string;
+  context?: string;
+  tone?: string;
+  format?: string;
+  length?: string;
+};
+
+const WIDGET_BASE_SHARED_CONTEXT = 'Voice note rewrite to help organize research and meeting insights.';
+
+const WIDGET_REWRITE_OPTIONS: Array<{
+  id: WidgetRewritePreset;
+  label: string;
+  config: WidgetRewriteConfig;
+}> = [
+  {
+    id: 'concise-formal',
+    label: 'Concise • Formal',
+    config: {
+      sharedContext: WIDGET_BASE_SHARED_CONTEXT,
+      context: 'Rewrite the text to be concise, professional, and suitable for business communication.',
+      tone: 'more-formal',
+      length: 'shorter',
+      format: 'plain-text'
+    }
+  },
+  {
+    id: 'expand',
+    label: 'Expand',
+    config: {
+      sharedContext: WIDGET_BASE_SHARED_CONTEXT,
+      context: 'Expand the text with helpful details while keeping the original intent clear.',
+      length: 'longer',
+      format: 'plain-text'
+    }
+  },
+  {
+    id: 'casual',
+    label: 'Casual',
+    config: {
+      sharedContext: WIDGET_BASE_SHARED_CONTEXT,
+      context: 'Rewrite the text with a relaxed, friendly tone while keeping all key information.',
+      tone: 'more-casual',
+      format: 'plain-text'
+    }
+  },
+  {
+    id: 'bullet',
+    label: 'Bullet list',
+    config: {
+      sharedContext: WIDGET_BASE_SHARED_CONTEXT,
+      context: 'Rewrite the text as a concise bullet list highlighting the key points.',
+      format: 'bullet'
+    }
+  },
+  {
+    id: 'action-items',
+    label: 'Action items',
+    config: {
+      sharedContext: WIDGET_BASE_SHARED_CONTEXT,
+      context: 'Rewrite the text as a list of clear action items with imperative verbs and owners where possible.',
+      format: 'plain-text',
+      tone: 'more-direct'
+    }
+  },
+  {
+    id: 'custom',
+    label: 'Custom instructions',
+    config: {
+      sharedContext: WIDGET_BASE_SHARED_CONTEXT,
+      context: 'Rewrite the text to improve clarity, flow, and readability while preserving the author’s intent.',
+      format: 'plain-text'
+    }
+  }
+];
+
+function resolveOutputLanguage(): string {
+  const browserLang = typeof navigator !== 'undefined' ? navigator.language : 'en';
+  const baseLang = browserLang?.split('-')[0]?.toLowerCase() ?? 'en';
+  const supportedLanguages = ['en', 'es', 'ja'];
+  return supportedLanguages.includes(baseLang) ? baseLang : 'en';
+}
+
+const WIDGET_REFINE_SHARED_CONTEXT =
+  'Refine the user’s dictated message for clarity while preserving intent.';
+const WIDGET_REFINE_CONTEXT =
+  'Polish the text by fixing grammar mistakes, removing redundant or filler wording, and keeping the tone natural.';
 
 type RecordingState = 'idle' | 'recording' | 'processing';
 
@@ -83,6 +182,14 @@ if (window.top !== window.self) {
   let composeOutputText: HTMLParagraphElement | null = null;
   let composeOutputValue: ComposeDraftResult | null = null;
   let composeOutputMessage: string | null = null;
+  let transcribeActionsRow: HTMLDivElement | null = null;
+  let refineButton: HTMLButtonElement | null = null;
+  let polishButton: HTMLButtonElement | null = null;
+  let copyButton: HTMLButtonElement | null = null;
+  let rewriteSelect: HTMLSelectElement | null = null;
+  let refineBusy = false;
+  let rewriterBusy = false;
+  let rewritePreset: WidgetRewritePreset = 'concise-formal';
 
   let root: HTMLDivElement | null = null;
   let triggerButton: HTMLButtonElement | null = null;
@@ -286,6 +393,57 @@ if (window.top !== window.self) {
         cursor: pointer;
         margin-left: auto;
       }
+      .ekko-transcribe-actions {
+        display: none;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        margin-top: 8px;
+      }
+      .ekko-transcribe-actions__group {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .ekko-transcribe-actions__button {
+        border: none;
+        background: #5968f2;
+        color: #ffffff;
+        border-radius: 10px;
+        padding: 6px 12px;
+        font-weight: 600;
+        cursor: pointer;
+        font-size: 0.82rem;
+        transition: background 0.2s ease;
+      }
+      .ekko-transcribe-actions__button:disabled {
+        cursor: not-allowed;
+        background: rgba(89, 104, 242, 0.4);
+      }
+      .ekko-transcribe-actions__select {
+        border-radius: 8px;
+        border: 1px solid rgba(89, 104, 242, 0.3);
+        padding: 4px 8px;
+        font-size: 0.82rem;
+        color: #1f1f3d;
+        background: #ffffff;
+      }
+      .ekko-transcribe-actions__copy {
+        width: 32px;
+        height: 32px;
+        border-radius: 16px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid rgba(89, 104, 242, 0.25);
+        background: rgba(89, 104, 242, 0.1);
+        color: #5968f2;
+        cursor: pointer;
+      }
+      .ekko-transcribe-actions__copy:disabled {
+        cursor: not-allowed;
+        opacity: 0.5;
+      }
     `;
     document.head.appendChild(style);
   }
@@ -299,6 +457,7 @@ if (window.top !== window.self) {
 
   function setDirectInsertState(enabled: boolean) {
     directInsertEnabled = !!enabled;
+    updateActionButtonStates();
   }
 
   function handleDirectInsertToggleMessage(message: EkkoMessage) {
@@ -326,10 +485,7 @@ if (window.top !== window.self) {
   async function composeWidgetAudio(audioBuffer: ArrayBuffer): Promise<ComposeDraftResult> {
     const instruction = settings.composePrompt.trim();
     console.info('[Ekko] widget instruction:', instruction);
-    const browserLang = typeof navigator !== 'undefined' ? navigator.language : 'en';
-    const baseLang = browserLang?.split('-')[0]?.toLowerCase() ?? 'en';
-    const supportedLanguages = ['en', 'es', 'ja'];
-    const outputLanguage = supportedLanguages.includes(baseLang) ? baseLang : 'en';
+  const outputLanguage = resolveOutputLanguage();
     let lastDraft: ComposeDraftResult | null = null;
     const systemPrompt = instruction
       ? `${WIDGET_DEFAULT_COMPOSE_PROMPT}\n\nFollow these additional instructions exactly:\n${instruction}`
@@ -397,6 +553,23 @@ if (window.top !== window.self) {
     if (response && typeof response === 'object' && 'ok' in response && !(response as { ok?: boolean }).ok) {
       const message = typeof response === 'object' && response && 'error' in response ? (response as { error?: string }).error : null;
       throw new Error(message || 'Unable to insert compose output.');
+    }
+  }
+
+  async function insertTranscriptText(text: string) {
+    const response = await chrome.runtime
+      .sendMessage({
+        type: 'ekko/direct-insert/apply',
+        payload: { text }
+      } satisfies EkkoMessage)
+      .catch((error) => {
+        console.warn('Unable to insert transcript output', error);
+        throw error;
+      });
+
+    if (response && typeof response === 'object' && 'ok' in response && !(response as { ok?: boolean }).ok) {
+      const message = typeof response === 'object' && response && 'error' in response ? (response as { error?: string }).error : null;
+      throw new Error(message || 'Unable to insert transcript output.');
     }
   }
 
@@ -621,6 +794,51 @@ if (window.top !== window.self) {
     controlsRow.appendChild(micButton);
     controlsRow.appendChild(settingsButton);
 
+    transcribeActionsRow = document.createElement('div');
+    transcribeActionsRow.className = 'ekko-transcribe-actions';
+
+    refineButton = document.createElement('button');
+    refineButton.type = 'button';
+    refineButton.className = 'ekko-transcribe-actions__button';
+    refineButton.textContent = 'Refine';
+    refineButton.addEventListener('click', handleRefineClick);
+
+    rewriteSelect = document.createElement('select');
+    rewriteSelect.className = 'ekko-transcribe-actions__select';
+    WIDGET_REWRITE_OPTIONS.forEach((option) => {
+      const opt = document.createElement('option');
+      opt.value = option.id;
+      opt.textContent = option.label;
+      rewriteSelect?.appendChild(opt);
+    });
+    rewriteSelect.value = rewritePreset;
+    rewriteSelect.addEventListener('change', (event) => {
+      rewritePreset = (event.target as HTMLSelectElement).value as WidgetRewritePreset;
+      updateActionButtonStates();
+    });
+
+    polishButton = document.createElement('button');
+    polishButton.type = 'button';
+    polishButton.className = 'ekko-transcribe-actions__button';
+    polishButton.textContent = 'Polish';
+    polishButton.addEventListener('click', handlePolishClick);
+
+    const polishGroup = document.createElement('div');
+    polishGroup.className = 'ekko-transcribe-actions__group';
+    polishGroup.appendChild(rewriteSelect);
+    polishGroup.appendChild(polishButton);
+
+    copyButton = document.createElement('button');
+    copyButton.type = 'button';
+    copyButton.className = 'ekko-transcribe-actions__copy';
+    copyButton.innerHTML = ICON_COPY;
+    copyButton.title = 'Copy transcript';
+    copyButton.addEventListener('click', handleCopyTranscript);
+
+    transcribeActionsRow.appendChild(refineButton);
+    transcribeActionsRow.appendChild(polishGroup);
+    transcribeActionsRow.appendChild(copyButton);
+
     regenerateButton = document.createElement('button');
     regenerateButton.type = 'button';
     regenerateButton.className = 'ekko-popup__regen';
@@ -633,6 +851,7 @@ if (window.top !== window.self) {
     body.appendChild(modeWrapper);
     body.appendChild(controlsRow);
     body.appendChild(transcribeOutputCard);
+    body.appendChild(transcribeActionsRow);
     body.appendChild(promptTextarea);
     body.appendChild(composeOutputCard);
     body.appendChild(footer);
@@ -642,6 +861,8 @@ if (window.top !== window.self) {
     root?.appendChild(popup);
     updateTranscribeOutputVisibility();
     updateComposeOutputVisibility();
+    updateTranscribeActionsVisibility();
+    updateActionButtonStates();
   }
 
   function updateModeUi() {
@@ -685,6 +906,7 @@ if (window.top !== window.self) {
       micButton.innerHTML = ICON_MIC_IDLE;
       micButton.title = 'Start recording';
     }
+    updateActionButtonStates();
   }
 
   function setStatus(text: string) {
@@ -773,6 +995,7 @@ if (window.top !== window.self) {
     if (transcribeOutputText) {
       transcribeOutputText.textContent = transcribeOutputValue;
     }
+    updateTranscribeActionsVisibility();
   }
 
   function setTranscribeOutput(text: string | null) {
@@ -787,6 +1010,42 @@ if (window.top !== window.self) {
       transcribeOutputPlaceholder.style.display = transcribeOutputValue ? 'none' : 'block';
     }
     updateTranscribeOutputVisibility();
+    updateActionButtonStates();
+  }
+
+  function updateTranscribeActionsVisibility() {
+    if (!transcribeActionsRow) return;
+    const visible = settings.mode === 'transcribe';
+    transcribeActionsRow.style.display = visible ? 'flex' : 'none';
+    if (visible) {
+      updateActionButtonStates();
+    }
+  }
+
+  function updateActionButtonStates() {
+    const hasTranscript = !!transcribeOutputValue && recorderState === 'idle';
+
+    if (refineButton) {
+      refineButton.disabled = !hasTranscript || refineBusy;
+      refineButton.textContent = refineBusy ? 'Refining…' : 'Refine';
+    }
+
+    if (polishButton) {
+      polishButton.disabled = !hasTranscript || rewriterBusy;
+      polishButton.textContent = rewriterBusy ? 'Polishing…' : 'Polish';
+    }
+
+    if (rewriteSelect) {
+      rewriteSelect.disabled = rewriterBusy;
+      rewriteSelect.value = rewritePreset;
+    }
+
+    if (copyButton) {
+      const canCopy = !!transcribeOutputValue && !refineBusy && !rewriterBusy && recorderState === 'idle';
+      copyButton.disabled = !canCopy;
+      copyButton.innerHTML = ICON_COPY;
+      copyButton.title = copyButton.disabled ? 'Copy transcript (disabled)' : 'Copy transcript';
+    }
   }
 
   function ensureWidget() {
@@ -804,6 +1063,7 @@ if (window.top !== window.self) {
     updateModeUi();
     updateMicUi();
     updateTranscribeOutputVisibility();
+    updateTranscribeActionsVisibility();
     updateComposeOutputVisibility();
     setStatus('');
     if (promptTextarea && (!document.activeElement || document.activeElement !== promptTextarea)) {
@@ -915,27 +1175,44 @@ if (window.top !== window.self) {
 
     const text = (transcribeFinal || transcribeInterim).trim();
     transcribeFinal = '';
-    transcribeInterim = '';
+   transcribeInterim = '';
     setTranscribeOutput(text || null);
 
     if (text) {
       recorderState = 'processing';
       updateMicUi();
-      setStatus('Injecting…');
-      chrome.runtime
-        .sendMessage({
-          type: 'ekko/transcript/update',
-          payload: { transcript: text, origin: 'panel' }
-        } satisfies EkkoMessage)
-        .finally(() => {
-          recorderState = 'idle';
-          updateMicUi();
-          setStatus('');
-        });
+      const shouldInsert = directInsertEnabled;
+      if (shouldInsert) {
+        setStatus('Inserting into page…');
+        insertTranscriptText(text)
+          .then(() => {
+            setStatus('Inserted into page.');
+          })
+          .catch(async (error) => {
+            console.warn('Transcript insert failed', error);
+            const copied = await copyToClipboard(text);
+            if (copied) {
+              setStatus('Copied to clipboard.');
+            } else {
+              setStatus(error instanceof Error ? error.message : 'Unable to insert transcript.');
+            }
+          })
+          .finally(() => {
+            recorderState = 'idle';
+            updateMicUi();
+            updateActionButtonStates();
+          });
+      } else {
+        setStatus('Transcription ready. Use Refine or Copy as needed.');
+        recorderState = 'idle';
+        updateMicUi();
+        updateActionButtonStates();
+      }
     } else {
       recorderState = 'idle';
       updateMicUi();
       setStatus('');
+      updateActionButtonStates();
     }
   }
 
@@ -1135,6 +1412,143 @@ if (window.top !== window.self) {
     } finally {
       recorderState = 'idle';
       updateMicUi();
+    }
+  }
+
+  async function handleRefineClick() {
+    if (refineBusy) return;
+    const text = transcribeOutputValue.trim();
+    if (!text || recorderState !== 'idle') {
+      setStatus('Record or paste text before refining.');
+      return;
+    }
+
+    refineBusy = true;
+    updateActionButtonStates();
+    setStatus('Refining text…');
+    setTranscribeOutput('Refining…');
+
+    try {
+      const result = await rewriteText({
+        text,
+        sharedContext: WIDGET_REFINE_SHARED_CONTEXT,
+        context: WIDGET_REFINE_CONTEXT,
+        format: 'plain-text',
+        outputLanguage: resolveOutputLanguage(),
+        onStatusChange: (status) => {
+          if (status === 'downloadable') {
+            setTranscribeOutput('Downloading on-device model…');
+          } else if (status === 'ready') {
+            setTranscribeOutput('Refining…');
+          }
+        },
+        onChunk: (chunk) => {
+          if (chunk.trim()) {
+            setTranscribeOutput(chunk);
+          }
+        }
+      });
+
+      const refined = result.content.trim();
+      setTranscribeOutput(refined);
+
+      if (directInsertEnabled) {
+        try {
+          await insertTranscriptText(refined);
+          setStatus('Refined text inserted into page.');
+        } catch (insertError) {
+          console.warn('Unable to insert refined text', insertError);
+          const copied = await copyToClipboard(refined);
+          setStatus(copied ? 'Refined text copied to clipboard.' : 'Unable to insert refined text.');
+        }
+      } else {
+        setStatus('Refined text ready.');
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Refine request failed.';
+      setStatus(message);
+      setTranscribeOutput(text);
+    } finally {
+      refineBusy = false;
+      updateActionButtonStates();
+    }
+  }
+
+  async function handlePolishClick() {
+    if (rewriterBusy) return;
+    const text = transcribeOutputValue.trim();
+    if (!text || recorderState !== 'idle') {
+      setStatus('Record or paste text before polishing.');
+      return;
+    }
+
+    const preset = WIDGET_REWRITE_OPTIONS.find((option) => option.id === rewritePreset) ?? WIDGET_REWRITE_OPTIONS[0];
+    rewriterBusy = true;
+    updateActionButtonStates();
+    setTranscribeOutput('Polishing…');
+
+    try {
+      const result = await rewriteText({
+        text,
+        sharedContext: preset.config.sharedContext,
+        context: preset.config.context,
+        tone: preset.config.tone,
+        format: preset.config.format,
+        length: preset.config.length,
+        outputLanguage: resolveOutputLanguage(),
+        onStatusChange: (status) => {
+          if (status === 'downloadable') {
+            setTranscribeOutput('Downloading on-device model…');
+          } else if (status === 'ready') {
+            setTranscribeOutput('Polishing…');
+          }
+        },
+        onChunk: (chunk) => {
+          if (chunk.trim()) {
+            setTranscribeOutput(chunk);
+          }
+        }
+      });
+
+      const polished = result.content.trim();
+      setTranscribeOutput(polished);
+
+      if (directInsertEnabled) {
+        try {
+          await insertTranscriptText(polished);
+          setStatus(`Polished text inserted using ${preset.label}.`);
+        } catch (insertError) {
+          console.warn('Unable to insert polished text', insertError);
+          const copied = await copyToClipboard(polished);
+          setStatus(copied ? 'Polished text copied to clipboard.' : 'Unable to insert polished text.');
+        }
+      } else {
+        setStatus(`Polished using ${preset.label}.`);
+      }
+    } catch (error) {
+      let message = error instanceof Error ? error.message : 'Rewrite failed.';
+      if (/enough space/i.test(message)) {
+        message = 'Chrome needs about 22 GB of free space to download the Gemini Nano model.';
+      }
+      setStatus(message);
+      setTranscribeOutput(text);
+    } finally {
+      rewriterBusy = false;
+      updateActionButtonStates();
+    }
+  }
+
+  async function handleCopyTranscript() {
+    const text = transcribeOutputValue.trim();
+    if (!text) {
+      setStatus('Nothing to copy yet.');
+      return;
+    }
+    const copied = await copyToClipboard(text);
+    if (copied) {
+      setStatus('Copied to clipboard.');
+    } else {
+      setStatus('Unable to copy text.');
     }
   }
 

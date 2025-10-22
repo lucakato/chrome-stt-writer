@@ -4,11 +4,6 @@ import { useSpeechRecorder } from '@shared/hooks/useSpeechRecorder';
 import type { EkkoMessage, EkkoResponse } from '@shared/messages';
 import { readOnboardingState, updateOnboardingState } from '@shared/storage/onboarding';
 import {
-  getSummarizerAvailability,
-  summarizeText,
-  type SummarizerAvailabilityStatus
-} from '@shared/ai/summarizer';
-import {
   getRewriterAvailability,
   rewriteText,
   type RewriterAvailabilityStatus
@@ -165,6 +160,9 @@ const rewritePresetConfig: Record<RewritePreset, RewritePresetConfig> = {
   }
 };
 
+const REFINE_CONTEXT =
+  'Refine the user\'s transcript by fixing grammar, removing redundant or filler language, and preserving intent.';
+
 const languageOptions: Array<{ value: string; label: string }> = [
   { value: 'auto', label: 'Auto (browser locale)' },
   { value: 'en-US', label: 'English (United States)' },
@@ -217,7 +215,7 @@ export default function App() {
   const [language, setLanguage] = useState<string>(() => navigator.language ?? 'en-US');
   const [onboardingDismissed, setOnboardingDismissed] = useState(false);
 
-  const [summarizerState, setSummarizerState] = useState<'idle' | 'checking' | SummarizerAvailabilityStatus | 'summarizing'>('idle');
+const [summarizerState, setSummarizerState] = useState<'idle' | 'checking' | RewriterAvailabilityStatus | 'summarizing'>('idle');
   const [summarizerError, setSummarizerError] = useState<string | null>(null);
   const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
   const [summarizerMessage, setSummarizerMessage] = useState<string | null>(null);
@@ -481,14 +479,16 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
     }
     setSummarizerError(null);
     setSummarizerState('summarizing');
-    setSummarizerMessage('Generating summary…');
+    setSummarizerMessage('Refining text…');
     setDownloadProgress(null);
     setStreamingSummary(null);
 
     try {
-      const result = await summarizeText({
+      const result = await rewriteText({
         text: activeTranscript,
-        context: 'Voice transcript captured via Ekko side panel.',
+        sharedContext: BASE_SHARED_CONTEXT,
+        context: REFINE_CONTEXT,
+        format: 'plain-text',
         outputLanguage,
         onStatusChange: (status) => {
           if (status === 'downloadable') {
@@ -498,7 +498,7 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
           if (status === 'ready') {
             setSummarizerState('summarizing');
             setSummarizerError(null);
-            setSummarizerMessage('Model ready. Summarizing…');
+            setSummarizerMessage('Model ready. Refining…');
           }
         },
         onDownloadProgress: (progress) => {
@@ -515,19 +515,19 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
       setSummarizerMessage(null);
       setSummarizerError(null);
       setDownloadProgress(null);
-      setStreamingSummary(result.summary);
+      setStreamingSummary(result.content);
 
       const entryId = activeSessionIdRef.current ?? crypto.randomUUID();
       activeSessionIdRef.current = entryId;
       setHistory((entries) => {
         const existing = entries.find((entry) => entry.id === entryId);
-        const actions = Array.from(new Set(['Summarized', ...(existing?.actions ?? [])]));
+        const actions = Array.from(new Set(['Refined', ...(existing?.actions ?? [])]));
         const updatedEntry: HistoryEntry = {
           id: entryId,
           title: activeTranscript.slice(0, 60) || 'Untitled transcript',
           createdAt: existing?.createdAt ?? new Date().toLocaleTimeString(),
           actions,
-          summary: result.summary,
+          summary: result.content,
           rewrite: existing?.rewrite,
           compose: existing?.compose
         };
@@ -541,7 +541,7 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
           payload: {
             sessionId: activeSessionIdRef.current ?? undefined,
             transcript: activeTranscript,
-            summary: result.summary
+            summary: result.content
           }
         } satisfies EkkoMessage)
         .then((response: EkkoResponse | undefined) => {
@@ -574,7 +574,7 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
           console.warn('Unable to persist summary to background', error);
         });
     } catch (error) {
-      const rawMessage = error instanceof Error ? error.message : 'Summarization failed.';
+      const rawMessage = error instanceof Error ? error.message : 'Refine request failed.';
       let message = rawMessage;
       if (/enough space/i.test(rawMessage)) {
         message = 'Chrome needs about 22 GB of free space on the profile drive to download the Gemini Nano model. Clear space and try again.';
@@ -1194,7 +1194,7 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
 
     void (async () => {
       setSummarizerState('checking');
-      const availability = await getSummarizerAvailability(outputLanguage);
+      const availability = await getRewriterAvailability(outputLanguage);
       if (cancelled) {
         return;
       }
@@ -1490,7 +1490,7 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
                 disabled={!activeTranscript || isSummarizerBusy || summarizerUnavailable}
                 onClick={handleSummarize}
               >
-                {isSummarizerBusy ? 'Summarizing…' : 'Summarize'}
+                {isSummarizerBusy ? 'Refining…' : 'Refine'}
               </button>
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                 <select
