@@ -31,8 +31,7 @@ export type PromptSessionOptions = {
   monitor?: (monitor: LanguageModelMonitor) => void;
 };
 
-export type ComposeFromAudioRequest = {
-  audio: ArrayBuffer | Blob;
+type ComposePromptBaseRequest = {
   systemPrompt: string;
   instruction?: string;
   expectedInputs?: LanguageModelModalityDescriptor[];
@@ -47,6 +46,18 @@ export type ComposeFromAudioRequest = {
   monitor?: (monitor: LanguageModelMonitor) => void;
   responseConstraint?: Record<string, unknown>;
   omitResponseConstraintInput?: boolean;
+};
+
+type ComposePromptInternalRequest = ComposePromptBaseRequest & {
+  userContent: PromptContentPart[];
+};
+
+export type ComposeFromAudioRequest = ComposePromptBaseRequest & {
+  audio: ArrayBuffer | Blob;
+};
+
+export type ComposeFromTextRequest = ComposePromptBaseRequest & {
+  text: string;
 };
 
 type DetectedLanguageModel = {
@@ -310,8 +321,8 @@ export async function createPromptSession(options: PromptSessionOptions = {}): P
 const COMPOSE_STRUCTURED_GUIDANCE =
   'Populate the JSON response fields exactly as follows: `subject` must always be a concise subject line (never omit it—craft one even if the user does not mention it). `paragraphs` must be an ordered array covering greeting, body sections, sign-off, and signature as separate entries with no blank strings. `content` must join those paragraphs using double newline characters so each appears on its own line when inserted. Do not include meta commentary or any fields outside this schema.';
 
-export async function composeFromAudio({
-  audio,
+async function runComposePrompt({
+  userContent,
   systemPrompt,
   instruction,
   expectedInputs,
@@ -326,7 +337,7 @@ export async function composeFromAudio({
   monitor,
   responseConstraint,
   omitResponseConstraintInput
-}: ComposeFromAudioRequest): Promise<ComposeDraftResult> {
+}: ComposePromptInternalRequest): Promise<ComposeDraftResult> {
   const detection = detectLanguageModel();
   if (!detection) {
     throw new Error('Prompt API is not available in this browser.');
@@ -356,12 +367,12 @@ export async function composeFromAudio({
   }
 
   try {
-    const userContent: PromptContentPart[] = [];
+    const combinedUserContent: PromptContentPart[] = [];
     const trimmedInstruction = instruction?.trim();
     if (trimmedInstruction) {
-      userContent.push({ type: 'text', value: trimmedInstruction });
+      combinedUserContent.push({ type: 'text', value: trimmedInstruction });
     }
-    userContent.push({ type: 'audio', value: audio });
+    combinedUserContent.push(...userContent);
 
     const structuredSystemPrompt = [systemPrompt, COMPOSE_STRUCTURED_GUIDANCE]
       .map((segment) => (typeof segment === 'string' ? segment.trim() : ''))
@@ -375,7 +386,7 @@ export async function composeFromAudio({
       },
       {
         role: 'user',
-        content: userContent
+        content: combinedUserContent
       }
     ];
 
@@ -476,3 +487,86 @@ export async function composeFromAudio({
     }
   }
 }
+
+export async function composeFromAudio({
+  audio,
+  systemPrompt,
+  instruction,
+  expectedInputs,
+  expectedOutputs,
+  temperature,
+  topK,
+  outputLanguage,
+  onChunk,
+  onStatusChange,
+  signal,
+  session,
+  monitor,
+  responseConstraint,
+  omitResponseConstraintInput
+}: ComposeFromAudioRequest): Promise<ComposeDraftResult> {
+  return runComposePrompt({
+    userContent: [{ type: 'audio', value: audio }],
+    systemPrompt,
+    instruction,
+    expectedInputs,
+    expectedOutputs,
+    temperature,
+    topK,
+    outputLanguage,
+    onChunk,
+    onStatusChange,
+    signal,
+    session,
+    monitor,
+    responseConstraint,
+    omitResponseConstraintInput
+  });
+}
+
+export async function composeFromText({
+  text,
+  systemPrompt,
+  instruction,
+  expectedInputs,
+  expectedOutputs,
+  temperature,
+  topK,
+  outputLanguage,
+  onChunk,
+  onStatusChange,
+  signal,
+  session,
+  monitor,
+  responseConstraint,
+  omitResponseConstraintInput
+}: ComposeFromTextRequest): Promise<ComposeDraftResult> {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    throw new Error('Cannot compose from empty text.');
+  }
+
+  const defaultInputs =
+    expectedInputs ?? [{ type: 'text', languages: outputLanguage ? [outputLanguage] : undefined }];
+
+  return runComposePrompt({
+    userContent: [{ type: 'text', value: trimmed }],
+    systemPrompt,
+    instruction,
+    expectedInputs: defaultInputs,
+    expectedOutputs,
+    temperature,
+    topK,
+    outputLanguage,
+    onChunk,
+    onStatusChange,
+    signal,
+    session,
+    monitor,
+    responseConstraint,
+    omitResponseConstraintInput
+  });
+}
+
+export const TRANSCRIBE_STRUCTURED_SYSTEM_PROMPT =
+  'You help users turn dictated email text into a finished draft. Keep the user’s intent and wording, organize it into clear paragraphs, and always produce a concise subject line. Do not add extra commentary.';

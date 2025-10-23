@@ -409,16 +409,32 @@ if (window.__ekkoDirectInsertInjected__) {
   }
 
   function applyTranscript(transcript: string, mode: 'replace' | 'insert' = 'replace'): boolean {
-    const target = resolveEditableTarget();
-    if (!target) {
+    if (typeof transcript !== 'string') {
       return false;
     }
 
+    const target = resolveEditableTarget();
+
     if (mode === 'insert') {
-      return insertAtCaret(target, transcript);
+      return target ? insertAtCaret(target, transcript) : false;
     }
 
-    return replaceEntireValue(target, transcript);
+    if (target && replaceEntireValue(target, transcript)) {
+      return true;
+    }
+
+    const trimmed = transcript.trim();
+    if (!trimmed) {
+      return false;
+    }
+
+    const paragraphs = deriveParagraphsFromContent(trimmed);
+    const fallbackDraft: ComposeDraftFields = {
+      content: joinParagraphs(paragraphs),
+      paragraphs
+    };
+
+    return applyDraft(fallbackDraft);
   }
 
   function applyDraft(draft: ComposeDraftFields): boolean {

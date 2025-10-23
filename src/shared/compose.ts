@@ -193,6 +193,37 @@ export function createFallbackDraft(text: string): ComposeDraftResult {
   };
 }
 
+export function normalizeComposeDraftResult(draft: ComposeDraftResult): ComposeDraftResult {
+  const rawContent = sanitizeContent(draft.content) ?? '';
+  const providedParagraphs = sanitizeParagraphs(draft.paragraphs) ?? [];
+
+  let normalizedParagraphs: string[];
+
+  if (providedParagraphs.length > 0) {
+    if (rawContent && joinParagraphs(providedParagraphs).trim() !== rawContent.trim()) {
+      normalizedParagraphs = deriveParagraphsFromContent(rawContent);
+    } else {
+      normalizedParagraphs = providedParagraphs;
+    }
+  } else if (rawContent) {
+    normalizedParagraphs = deriveParagraphsFromContent(rawContent);
+  } else {
+    normalizedParagraphs = [];
+  }
+
+  const normalizedContent =
+    normalizedParagraphs.length > 0 ? joinParagraphs(normalizedParagraphs).trim() : rawContent.trim();
+
+  const normalizedSubject = sanitizeSubject(draft.subject);
+
+  return {
+    raw: draft.raw,
+    content: normalizedContent,
+    subject: normalizedSubject,
+    paragraphs: normalizedParagraphs
+  };
+}
+
 export function coerceComposeDraft(value: unknown): ComposeDraftResult | null {
   if (typeof value === 'string') {
     return parseComposeDraftFromJson(value);

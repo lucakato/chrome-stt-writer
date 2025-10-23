@@ -15,14 +15,16 @@ import {
   type EkkoMode,
   type EkkoSettingsChange
 } from '@shared/settings';
-import { composeFromAudio } from '@shared/ai/prompt';
+import { composeFromAudio, composeFromText, TRANSCRIBE_STRUCTURED_SYSTEM_PROMPT } from '@shared/ai/prompt';
 import { rewriteText } from '@shared/ai/rewriter';
 import {
   ComposeDraftResult,
   coerceComposeDraft,
   composeDraftToClipboardText,
+  createFallbackDraft,
   deriveParagraphs,
-  joinParagraphs
+  joinParagraphs,
+  normalizeComposeDraftResult
 } from '@shared/compose';
 
 const WIDGET_DEFAULT_COMPOSE_PROMPT =
@@ -509,26 +511,10 @@ if (window.top !== window.self) {
       }
     });
 
-    const normalizedParagraphs =
-      draft.paragraphs && draft.paragraphs.length > 0 ? draft.paragraphs : deriveParagraphs(draft.content);
-    const normalized: ComposeDraftResult = {
-      raw: draft.raw,
-      content: joinParagraphs(normalizedParagraphs).trim(),
-      subject: draft.subject && draft.subject.trim().length > 0 ? draft.subject.trim() : undefined,
-      paragraphs: normalizedParagraphs
-    };
+    const normalized = normalizeComposeDraftResult(draft);
 
     if (!normalized.content && lastDraft) {
-      const fallbackParagraphs =
-        lastDraft.paragraphs && lastDraft.paragraphs.length > 0
-          ? lastDraft.paragraphs
-          : deriveParagraphs(lastDraft.content);
-      return {
-        raw: lastDraft.raw,
-        content: joinParagraphs(fallbackParagraphs).trim(),
-        subject: lastDraft.subject && lastDraft.subject.trim().length > 0 ? lastDraft.subject.trim() : undefined,
-        paragraphs: fallbackParagraphs
-      };
+      return normalizeComposeDraftResult(lastDraft);
     }
 
     return normalized;
@@ -557,11 +543,46 @@ if (window.top !== window.self) {
     }
   }
 
-  async function insertTranscriptText(text: string) {
+  async function insertTranscriptText(
+    text: string,
+    options: { skipStructuring?: boolean } = {}
+  ) {
+    const trimmed = text.trim();
+    let payload:
+      | {
+          draft: {
+            content: string;
+            subject?: string;
+            paragraphs?: string[];
+          };
+        }
+      | { text: string }
+      | null = null;
+
+    const shouldStructure = directInsertEnabled && trimmed && !options.skipStructuring;
+
+    if (shouldStructure) {
+      setStatus('Preparing email draft…');
+      const draft = await composeTranscriptDraft(trimmed);
+      if (draft) {
+        payload = {
+          draft: {
+            content: draft.content,
+            subject: draft.subject,
+            paragraphs: draft.paragraphs
+          }
+        };
+      }
+    }
+
+    if (!payload) {
+      payload = { text };
+    }
+
     const response = await chrome.runtime
       .sendMessage({
         type: 'ekko/direct-insert/apply',
-        payload: { text }
+        payload
       } satisfies EkkoMessage)
       .catch((error) => {
         console.warn('Unable to insert transcript output', error);
@@ -920,6 +941,32 @@ if (window.top !== window.self) {
     }
   }
 
+  async function composeTranscriptDraft(text: string): Promise<ComposeDraftResult | null> {
+    const trimmed = text.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    try {
+      const draft = await composeFromText({
+        text: trimmed,
+        systemPrompt: TRANSCRIBE_STRUCTURED_SYSTEM_PROMPT,
+        outputLanguage: resolveOutputLanguage(),
+        onStatusChange: (status) => {
+          if (status === 'downloadable') {
+            setStatus('Downloading on-device model…');
+          } else if (status === 'ready') {
+            setStatus('Preparing email draft…');
+          }
+        }
+      });
+      return normalizeComposeDraftResult(draft);
+    } catch (error) {
+      console.warn('Unable to generate structured transcript draft', error);
+      return normalizeComposeDraftResult(createFallbackDraft(trimmed));
+    }
+  }
+
   function setTimer(elapsedMs: number) {
     if (!timerLabel) return;
     if (!composeStart) {
@@ -1184,10 +1231,10 @@ if (window.top !== window.self) {
       updateMicUi();
       const shouldInsert = directInsertEnabled;
       if (shouldInsert) {
-        setStatus('Inserting into page…');
+        setStatus('Preparing email draft…');
         insertTranscriptText(text)
           .then(() => {
-            setStatus('Inserted into page.');
+            setStatus('Draft inserted into page.');
           })
           .catch(async (error) => {
             console.warn('Transcript insert failed', error);
@@ -1455,7 +1502,7 @@ if (window.top !== window.self) {
 
       if (directInsertEnabled) {
         try {
-          await insertTranscriptText(refined);
+          await insertTranscriptText(refined, { skipStructuring: true });
           setStatus('Refined text inserted into page.');
         } catch (insertError) {
           console.warn('Unable to insert refined text', insertError);
@@ -1516,7 +1563,7 @@ if (window.top !== window.self) {
 
       if (directInsertEnabled) {
         try {
-          await insertTranscriptText(polished);
+          await insertTranscriptText(polished, { skipStructuring: true });
           setStatus(`Polished text inserted using ${preset.label}.`);
         } catch (insertError) {
           console.warn('Unable to insert polished text', insertError);

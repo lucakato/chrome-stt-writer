@@ -10,16 +10,20 @@ import {
 } from '@shared/ai/rewriter';
 import {
   composeFromAudio,
+  composeFromText,
   createPromptSession,
   getPromptAvailability,
+  TRANSCRIBE_STRUCTURED_SYSTEM_PROMPT,
   type PromptAvailabilityStatus
 } from '@shared/ai/prompt';
 import {
   ComposeDraftResult,
   coerceComposeDraft,
   composeDraftToClipboardText,
+  createFallbackDraft,
   deriveParagraphs,
-  joinParagraphs
+  joinParagraphs,
+  normalizeComposeDraftResult
 } from '@shared/compose';
 import {
   DEFAULT_SETTINGS,
@@ -236,6 +240,8 @@ const [summarizerState, setSummarizerState] = useState<'idle' | 'checking' | Rew
   const [composeElapsedMs, setComposeElapsedMs] = useState(0);
   const activeSessionIdRef = useRef<string | null>(null);
   const lastDirectInsertValueRef = useRef<string>('');
+  const lastStructuredTranscriptRef = useRef<string>('');
+  const structuredInsertAbortRef = useRef<AbortController | null>(null);
   const composeRecorderRef = useRef<MediaRecorder | null>(null);
   const composeChunksRef = useRef<Blob[]>([]);
   const composeTimerRef = useRef<number | null>(null);
@@ -1337,6 +1343,100 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
       }
     };
   }, [directInsertEnabled, displayTranscript]);
+
+  useEffect(() => {
+    if (!directInsertEnabled) {
+      structuredInsertAbortRef.current?.abort();
+      structuredInsertAbortRef.current = null;
+      lastStructuredTranscriptRef.current = '';
+      return;
+    }
+
+    const trimmed = activeTranscript.trim();
+    if (!trimmed) {
+      structuredInsertAbortRef.current?.abort();
+      structuredInsertAbortRef.current = null;
+      lastStructuredTranscriptRef.current = '';
+      return;
+    }
+
+    if (isRecording) {
+      return;
+    }
+
+    if (trimmed === lastStructuredTranscriptRef.current) {
+      return;
+    }
+
+    const controller = new AbortController();
+    structuredInsertAbortRef.current?.abort();
+    structuredInsertAbortRef.current = controller;
+    let cancelled = false;
+
+    const deliverDraft = async (draft: ComposeDraftResult) => {
+      const normalized = normalizeComposeDraftResult(draft);
+      const runtime = chrome.runtime;
+      if (!runtime?.sendMessage) {
+        throw new Error('Chrome runtime unavailable for direct insert.');
+      }
+      await runtime.sendMessage({
+        type: 'ekko/direct-insert/apply',
+        payload: {
+          draft: {
+            content: normalized.content,
+            subject: normalized.subject,
+            paragraphs: normalized.paragraphs
+          }
+        }
+      } satisfies EkkoMessage);
+    };
+
+    (async () => {
+      try {
+        const draft = await composeFromText({
+          text: trimmed,
+          systemPrompt: TRANSCRIBE_STRUCTURED_SYSTEM_PROMPT,
+          outputLanguage,
+          signal: controller.signal
+        });
+        if (cancelled) {
+          return;
+        }
+        await deliverDraft(draft);
+        if (!cancelled) {
+          lastStructuredTranscriptRef.current = trimmed;
+          lastDirectInsertValueRef.current = trimmed;
+        }
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          return;
+        }
+        console.warn('Unable to generate structured transcript draft', error);
+        const fallback = normalizeComposeDraftResult(createFallbackDraft(trimmed));
+        try {
+          await deliverDraft(fallback);
+          if (!cancelled) {
+            lastStructuredTranscriptRef.current = trimmed;
+            lastDirectInsertValueRef.current = trimmed;
+          }
+        } catch (insertError) {
+          console.warn('Unable to insert structured transcript draft', insertError);
+        }
+      } finally {
+        if (structuredInsertAbortRef.current === controller) {
+          structuredInsertAbortRef.current = null;
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [activeTranscript, directInsertEnabled, isRecording, outputLanguage]);
 
   useEffect(() => {
     return () => {
