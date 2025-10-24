@@ -766,6 +766,98 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
     }
   }, [activeTranscript]);
 
+  const deliverDirectInsertDraft = useCallback(async (draft: ComposeDraftResult) => {
+    const normalized = normalizeComposeDraftResult(draft);
+    const runtime = chrome.runtime;
+    if (!runtime?.sendMessage) {
+      throw new Error('Chrome runtime unavailable for direct insert.');
+    }
+    await runtime.sendMessage({
+      type: 'ekko/direct-insert/apply',
+      payload: {
+        draft: {
+          content: normalized.content,
+          subject: normalized.subject,
+          paragraphs: normalized.paragraphs
+        }
+      }
+    } satisfies EkkoMessage);
+    return true;
+  }, []);
+
+  const insertTranscriptIntoPage = useCallback(
+    async (
+      text: string,
+      options: { skipStructuring?: boolean; signal?: AbortSignal } = {}
+    ): Promise<boolean> => {
+      const trimmed = text.trim();
+      if (!trimmed) {
+        return false;
+      }
+
+      const runtime = chrome.runtime;
+      if (!runtime?.sendMessage) {
+        throw new Error('Chrome runtime unavailable for direct insert.');
+      }
+
+      if (options.skipStructuring) {
+        await runtime.sendMessage({
+          type: 'ekko/direct-insert/apply',
+          payload: { text: trimmed }
+        } satisfies EkkoMessage);
+        return true;
+      }
+
+      try {
+        const draft = await composeFromText({
+          text: trimmed,
+          systemPrompt: TRANSCRIBE_STRUCTURED_SYSTEM_PROMPT,
+          outputLanguage,
+          signal: options.signal
+        });
+        await deliverDirectInsertDraft(draft);
+        return true;
+      } catch (error) {
+        if (options.signal?.aborted) {
+          throw error;
+        }
+        console.warn('Unable to generate structured transcript draft', error);
+        const fallback = normalizeComposeDraftResult(createFallbackDraft(trimmed));
+        await deliverDirectInsertDraft(fallback);
+        return true;
+      }
+    },
+    [deliverDirectInsertDraft, outputLanguage]
+  );
+
+  const handleInsertTranscript = useCallback(async () => {
+    const text = activeTranscript.trim();
+    if (!text) {
+      setSummarizerMessage('Nothing to insert yet.');
+      return;
+    }
+
+    if (!directInsertEnabled) {
+      setSummarizerMessage('Enable Direct Insert Mode to insert into page.');
+      return;
+    }
+
+    setSummarizerError(null);
+    setSummarizerMessage('Inserting into page…');
+
+    try {
+      await insertTranscriptIntoPage(text);
+      lastDirectInsertValueRef.current = text;
+      lastStructuredTranscriptRef.current = text;
+      setSummarizerMessage('Draft inserted into page.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to insert transcript.';
+      setSummarizerError(message);
+      setSummarizerMessage(null);
+      console.warn('Unable to insert transcript into page', error);
+    }
+  }, [activeTranscript, directInsertEnabled, insertTranscriptIntoPage]);
+
   const handleDirectInsertToggle = useCallback(
     (enabled: boolean) => {
       setDirectInsertEnabled(enabled);
@@ -1418,40 +1510,14 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
     structuredInsertAbortRef.current = controller;
     let cancelled = false;
 
-    const deliverDraft = async (draft: ComposeDraftResult) => {
-      const normalized = normalizeComposeDraftResult(draft);
-      const runtime = chrome.runtime;
-      if (!runtime?.sendMessage) {
-        throw new Error('Chrome runtime unavailable for direct insert.');
-      }
-      await runtime.sendMessage({
-        type: 'ekko/direct-insert/apply',
-        payload: {
-          draft: {
-            content: normalized.content,
-            subject: normalized.subject,
-            paragraphs: normalized.paragraphs
-          }
-        }
-      } satisfies EkkoMessage);
-    };
-
     (async () => {
       try {
-        const draft = await composeFromText({
-          text: trimmed,
-          systemPrompt: TRANSCRIBE_STRUCTURED_SYSTEM_PROMPT,
-          outputLanguage,
-          signal: controller.signal
-        });
+        await insertTranscriptIntoPage(trimmed, { signal: controller.signal });
         if (cancelled) {
           return;
         }
-        await deliverDraft(draft);
-        if (!cancelled) {
-          lastStructuredTranscriptRef.current = trimmed;
-          lastDirectInsertValueRef.current = trimmed;
-        }
+        lastStructuredTranscriptRef.current = trimmed;
+        lastDirectInsertValueRef.current = trimmed;
       } catch (error) {
         if (cancelled) {
           return;
@@ -1459,17 +1525,7 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
         if (error instanceof DOMException && error.name === 'AbortError') {
           return;
         }
-        console.warn('Unable to generate structured transcript draft', error);
-        const fallback = normalizeComposeDraftResult(createFallbackDraft(trimmed));
-        try {
-          await deliverDraft(fallback);
-          if (!cancelled) {
-            lastStructuredTranscriptRef.current = trimmed;
-            lastDirectInsertValueRef.current = trimmed;
-          }
-        } catch (insertError) {
-          console.warn('Unable to insert structured transcript draft', insertError);
-        }
+        console.warn('Unable to insert structured transcript draft', error);
       } finally {
         if (structuredInsertAbortRef.current === controller) {
           structuredInsertAbortRef.current = null;
@@ -1481,7 +1537,7 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
       cancelled = true;
       controller.abort();
     };
-  }, [activeTranscript, directInsertEnabled, isRecording, outputLanguage]);
+  }, [activeTranscript, directInsertEnabled, insertTranscriptIntoPage, isRecording]);
 
   useEffect(() => {
     return () => {
@@ -1648,6 +1704,22 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
               </div>
               <button type="button" className="button" disabled={!activeTranscript} onClick={handleCopy}>
                 Copy
+              </button>
+              <button
+                type="button"
+                className="button button--primary"
+                disabled={
+                  !activeTranscript ||
+                  isSummarizerBusy ||
+                  summarizerUnavailable ||
+                  isRewriterBusy ||
+                  rewriterUnavailable ||
+                  !directInsertEnabled
+                }
+                onClick={handleInsertTranscript}
+                title={directInsertEnabled ? 'Insert transcript into page' : 'Enable Direct Insert Mode to insert'}
+              >
+                Insert
               </button>
             </div>
             <div className="summary-status" aria-live="polite">

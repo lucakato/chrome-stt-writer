@@ -4,7 +4,7 @@ import type { IconType } from 'react-icons';
 import { MdKeyboardVoice } from 'react-icons/md';
 import { RiVoiceprintFill } from 'react-icons/ri';
 import { IoSettingsSharp } from 'react-icons/io5';
-import { FiCopy } from 'react-icons/fi';
+import { FiCopy, FiCornerDownRight } from 'react-icons/fi';
 import type { EkkoMessage, EkkoResponse } from '@shared/messages';
 import {
   getEkkoSettings,
@@ -44,6 +44,7 @@ const ICON_MIC_IDLE = iconMarkup(MdKeyboardVoice);
 const ICON_MIC_RECORDING = iconMarkup(RiVoiceprintFill);
 const ICON_SETTINGS = iconMarkup(IoSettingsSharp);
 const ICON_COPY = iconMarkup(FiCopy);
+const ICON_INSERT = iconMarkup(FiCornerDownRight);
 const ICON_MIC_PROCESSING = '<span aria-hidden="true">⏳</span>';
 const WIDGET_COMPOSE_MAX_DURATION_MS = 90_000;
 
@@ -189,10 +190,12 @@ if (window.top !== window.self) {
   let refineButton: HTMLButtonElement | null = null;
   let polishButton: HTMLButtonElement | null = null;
   let copyButton: HTMLButtonElement | null = null;
+  let insertButton: HTMLButtonElement | null = null;
   let rewriteSelect: HTMLSelectElement | null = null;
   let refineBusy = false;
   let rewriterBusy = false;
   let rewritePreset: WidgetRewritePreset = 'concise-formal';
+  let transcribeOutputKind: 'raw' | 'refine' | 'polish' | 'other' = 'raw';
 
   let root: HTMLDivElement | null = null;
   let triggerButton: HTMLButtonElement | null = null;
@@ -448,6 +451,23 @@ if (window.top !== window.self) {
         cursor: not-allowed;
         opacity: 0.5;
       }
+      .ekko-transcribe-actions__insert {
+        width: 32px;
+        height: 32px;
+        border-radius: 16px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid rgba(89, 104, 242, 0.4);
+        background: #5968f2;
+        color: #ffffff;
+        cursor: pointer;
+      }
+      .ekko-transcribe-actions__insert:disabled {
+        cursor: not-allowed;
+        opacity: 0.5;
+        background: rgba(89, 104, 242, 0.5);
+      }
     `;
     document.head.appendChild(style);
   }
@@ -593,6 +613,37 @@ if (window.top !== window.self) {
     if (response && typeof response === 'object' && 'ok' in response && !(response as { ok?: boolean }).ok) {
       const message = typeof response === 'object' && response && 'error' in response ? (response as { error?: string }).error : null;
       throw new Error(message || 'Unable to insert transcript output.');
+    }
+  }
+
+  async function handleInsertTranscript() {
+    const text = transcribeOutputValue.trim();
+    if (!text) {
+      setStatus('Nothing to insert yet.');
+      return;
+    }
+
+    if (!directInsertEnabled) {
+      setStatus('Enable Direct Insert Mode to insert into page.');
+      return;
+    }
+
+    const skipStructuring = transcribeOutputKind !== 'raw';
+
+    try {
+      setStatus('Inserting into page…');
+      await insertTranscriptText(text, skipStructuring ? { skipStructuring: true } : undefined);
+      setStatus('Draft inserted into page.');
+    } catch (error) {
+      console.warn('Unable to insert transcript output', error);
+      const copied = await copyToClipboard(text);
+      if (copied) {
+        setStatus('Copied to clipboard instead.');
+      } else {
+        setStatus(error instanceof Error ? error.message : 'Unable to insert transcript.');
+      }
+    } finally {
+      updateActionButtonStates();
     }
   }
 
@@ -853,11 +904,19 @@ if (window.top !== window.self) {
     copyButton.title = 'Copy transcript';
     copyButton.addEventListener('click', handleCopyTranscript);
 
+    insertButton = document.createElement('button');
+    insertButton.type = 'button';
+    insertButton.className = 'ekko-transcribe-actions__insert';
+    insertButton.innerHTML = ICON_INSERT;
+    insertButton.title = 'Insert into page';
+    insertButton.addEventListener('click', handleInsertTranscript);
+
     const polishRow = document.createElement('div');
     polishRow.className = 'ekko-transcribe-actions__row';
     polishRow.appendChild(rewriteSelect);
     polishRow.appendChild(polishButton);
     polishRow.appendChild(copyButton);
+    polishRow.appendChild(insertButton);
 
     transcribeActionsRow.appendChild(refineButton);
     transcribeActionsRow.appendChild(polishRow);
@@ -1047,7 +1106,11 @@ if (window.top !== window.self) {
     updateTranscribeActionsVisibility();
   }
 
-  function setTranscribeOutput(text: string | null) {
+  function setTranscribeOutput(
+    text: string | null,
+    kind: 'raw' | 'refine' | 'polish' | 'other' = 'other'
+  ) {
+    transcribeOutputKind = kind;
     transcribeOutputValue = text && text.trim() ? text.trim() : '';
     if (transcribeOutputText) {
       transcribeOutputText.textContent = transcribeOutputValue;
@@ -1095,6 +1158,18 @@ if (window.top !== window.self) {
       copyButton.innerHTML = ICON_COPY;
       copyButton.title = copyButton.disabled ? 'Copy transcript (disabled)' : 'Copy transcript';
     }
+
+    if (insertButton) {
+      const canInsert =
+        !!transcribeOutputValue &&
+        !refineBusy &&
+        !rewriterBusy &&
+        recorderState === 'idle' &&
+        directInsertEnabled;
+      insertButton.disabled = !canInsert;
+      insertButton.innerHTML = ICON_INSERT;
+      insertButton.title = canInsert ? 'Insert into page' : 'Enable Direct Insert Mode to insert';
+    }
   }
 
   function ensureWidget() {
@@ -1131,7 +1206,7 @@ if (window.top !== window.self) {
   }
 
   async function startTranscribe() {
-    setTranscribeOutput('Listening…');
+    setTranscribeOutput('Listening…', 'other');
     const SpeechRecognitionCtor =
       (window as typeof window & { webkitSpeechRecognition?: typeof SpeechRecognition }).SpeechRecognition ||
       (window as typeof window & { webkitSpeechRecognition?: typeof SpeechRecognition }).webkitSpeechRecognition;
@@ -1175,7 +1250,7 @@ if (window.top !== window.self) {
       const interim = transcribeInterim.trim();
       const finalText = transcribeFinal.trim();
       const combined = interim ? `${finalText}${finalText ? ' ' : ''}${interim}`.trim() : finalText;
-      setTranscribeOutput(combined || null);
+      setTranscribeOutput(combined || null, 'raw');
       if (finalText && finalText !== lastLoggedWidgetTranscript) {
         const confidenceOutput =
           typeof lastConfidence === 'number' ? Number(lastConfidence.toFixed(3)) : undefined;
@@ -1207,7 +1282,7 @@ if (window.top !== window.self) {
 
     recognitionTimer = window.setTimeout(() => {
       setStatus('Stopped after 3 minutes to stay responsive.');
-      setTranscribeOutput('Stopped after 3 minutes to stay responsive.');
+    setTranscribeOutput('Stopped after 3 minutes to stay responsive.', 'other');
       stopTranscribe();
     }, 3 * 60 * 1000);
   }
@@ -1225,7 +1300,7 @@ if (window.top !== window.self) {
     const text = (transcribeFinal || transcribeInterim).trim();
     transcribeFinal = '';
    transcribeInterim = '';
-    setTranscribeOutput(text || null);
+    setTranscribeOutput(text || null, 'raw');
 
     if (text) {
       recorderState = 'processing';
@@ -1475,7 +1550,7 @@ if (window.top !== window.self) {
     refineBusy = true;
     updateActionButtonStates();
     setStatus('Refining text…');
-    setTranscribeOutput('Refining…');
+    setTranscribeOutput('Refining…', 'other');
 
     try {
       const result = await rewriteText({
@@ -1486,20 +1561,20 @@ if (window.top !== window.self) {
         outputLanguage: resolveOutputLanguage(),
         onStatusChange: (status) => {
           if (status === 'downloadable') {
-            setTranscribeOutput('Downloading on-device model…');
+            setTranscribeOutput('Downloading on-device model…', 'other');
           } else if (status === 'ready') {
-            setTranscribeOutput('Refining…');
+            setTranscribeOutput('Refining…', 'other');
           }
         },
         onChunk: (chunk) => {
           if (chunk.trim()) {
-            setTranscribeOutput(chunk);
+            setTranscribeOutput(chunk, 'refine');
           }
         }
       });
 
       const refined = result.content.trim();
-      setTranscribeOutput(refined);
+      setTranscribeOutput(refined, 'refine');
 
       if (directInsertEnabled) {
         try {
@@ -1516,7 +1591,7 @@ if (window.top !== window.self) {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Refine request failed.';
       setStatus(message);
-      setTranscribeOutput(text);
+      setTranscribeOutput(text, 'raw');
     } finally {
       refineBusy = false;
       updateActionButtonStates();
@@ -1534,7 +1609,7 @@ if (window.top !== window.self) {
     const preset = WIDGET_REWRITE_OPTIONS.find((option) => option.id === rewritePreset) ?? WIDGET_REWRITE_OPTIONS[0];
     rewriterBusy = true;
     updateActionButtonStates();
-    setTranscribeOutput('Polishing…');
+    setTranscribeOutput('Polishing…', 'other');
 
     try {
       const result = await rewriteText({
@@ -1547,20 +1622,20 @@ if (window.top !== window.self) {
         outputLanguage: resolveOutputLanguage(),
         onStatusChange: (status) => {
           if (status === 'downloadable') {
-            setTranscribeOutput('Downloading on-device model…');
+            setTranscribeOutput('Downloading on-device model…', 'other');
           } else if (status === 'ready') {
-            setTranscribeOutput('Polishing…');
+            setTranscribeOutput('Polishing…', 'other');
           }
         },
         onChunk: (chunk) => {
           if (chunk.trim()) {
-            setTranscribeOutput(chunk);
+            setTranscribeOutput(chunk, 'polish');
           }
         }
       });
 
       const polished = result.content.trim();
-      setTranscribeOutput(polished);
+      setTranscribeOutput(polished, 'polish');
 
       if (directInsertEnabled) {
         try {
@@ -1580,7 +1655,7 @@ if (window.top !== window.self) {
         message = 'Chrome needs about 22 GB of free space to download the Gemini Nano model.';
       }
       setStatus(message);
-      setTranscribeOutput(text);
+      setTranscribeOutput(text, 'raw');
     } finally {
       rewriterBusy = false;
       updateActionButtonStates();
