@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useMicrophonePermission } from '@shared/hooks/useMicrophonePermission';
 import { useSpeechRecorder } from '@shared/hooks/useSpeechRecorder';
 import type { EkkoMessage, EkkoResponse } from '@shared/messages';
@@ -475,6 +475,51 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
       : composeMicAvailable
       ? 'Ready'
       : 'Microphone unavailable';
+
+  const micMessages = useMemo(() => {
+    const messages: ReactNode[] = [];
+    if (micError) {
+      messages.push(
+        <p key="mic-error" className="helper-text danger">
+          {micError}
+        </p>
+      );
+    }
+    if (!micError && micStatus === 'denied') {
+      messages.push(
+        <p key="mic-denied" className="helper-text danger">
+          Microphone access is blocked. Click the lock icon next to the address bar, set Microphone to "Allow", then try
+          again.
+        </p>
+      );
+    }
+    if (!micError && micStatus === 'prompt') {
+      messages.push(
+        <p key="mic-prompt" className="helper-text">
+          When Chrome prompts for access, choose Allow to start recording.
+        </p>
+      );
+    }
+    if (sttError) {
+      messages.push(
+        <p key="stt-error" className="helper-text danger">
+          {sttError}
+        </p>
+      );
+    }
+    if (!sttSupported) {
+      messages.push(
+        <p key="stt-unsupported" className="helper-text danger">
+          Live speech-to-text is not available in this browser. Try Chrome on desktop (138+) for Gemini Nano.
+        </p>
+      );
+    }
+    return messages;
+  }, [micError, micStatus, sttError, sttSupported]);
+
+  const showMicSettingsButton = micStatus === 'denied';
+  const hasMicMessages = micMessages.length > 0;
+  const shouldRenderMicMessages = hasMicMessages || showMicSettingsButton;
 
   const handleSummarize = useCallback(async () => {
     if (!activeTranscript) {
@@ -1495,7 +1540,7 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
 
       {mode === 'transcribe' && (
         <>
-          <section className="panel-section" aria-labelledby="capture-section-title">
+          <section className="panel-section panel-section--capture" aria-labelledby="capture-section-title">
             <div className="record-controls">
               <div className="record-controls__main">
                 <button
@@ -1532,29 +1577,16 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
                 </button>
               )}
             </div>
-            <div className="record-controls__messages" aria-live="polite">
-              {micError && <p className="helper-text danger">{micError}</p>}
-              {!micError && micStatus === 'denied' && (
-                <p className="helper-text danger">
-                  Microphone access is blocked. Click the lock icon next to the address bar, set Microphone to
-                  "Allow", then try again.
-                </p>
-              )}
-              {!micError && micStatus === 'prompt' && (
-                <p className="helper-text">When Chrome prompts for access, choose Allow to start recording.</p>
-              )}
-              {micStatus === 'denied' && (
-                <button type="button" className="text-button" onClick={openMicrophoneSettings}>
-                  Open Chrome microphone settings
-                </button>
-              )}
-              {sttError && <p className="helper-text danger">{sttError}</p>}
-              {!sttSupported && (
-                <p className="helper-text danger">
-                  Live speech-to-text is not available in this browser. Try Chrome on desktop (138+) for Gemini Nano.
-                </p>
-              )}
-            </div>
+            {shouldRenderMicMessages && (
+              <div className="record-controls__messages" aria-live="polite">
+                {micMessages}
+                {showMicSettingsButton && (
+                  <button type="button" className="text-button" onClick={openMicrophoneSettings}>
+                    Open Chrome microphone settings
+                  </button>
+                )}
+              </div>
+            )}
             {!onboardingDismissed && micStatus !== 'granted' && (
               <div className="onboarding-card" role="note">
                 <h3 className="onboarding-card__title">First-time setup</h3>
@@ -1574,7 +1606,7 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
             )}
           </section>
 
-          <section className="panel-section" aria-labelledby="transcript-title">
+          <section className="panel-section panel-section--transcript" aria-labelledby="transcript-title">
             <h2 id="transcript-title" className="section-title">
               Transcript
             </h2>
@@ -1593,9 +1625,9 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
               >
                 {isSummarizerBusy ? 'Refining…' : 'Refine'}
               </button>
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <div className="actions-toolbar__group">
                 <select
-                  className="select"
+                  className="select select--compact"
                   value={rewritePreset}
                   onChange={(event) => setRewritePreset(event.target.value as RewritePreset)}
                 >

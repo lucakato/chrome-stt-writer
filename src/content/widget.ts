@@ -398,13 +398,14 @@ if (window.top !== window.self) {
       }
       .ekko-transcribe-actions {
         display: none;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 8px;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 6px;
         margin-top: 8px;
       }
-      .ekko-transcribe-actions__group {
+      .ekko-transcribe-actions__row {
         display: inline-flex;
+        flex-wrap: wrap;
         align-items: center;
         gap: 6px;
       }
@@ -845,11 +846,6 @@ if (window.top !== window.self) {
     polishButton.textContent = 'Polish';
     polishButton.addEventListener('click', handlePolishClick);
 
-    const polishGroup = document.createElement('div');
-    polishGroup.className = 'ekko-transcribe-actions__group';
-    polishGroup.appendChild(rewriteSelect);
-    polishGroup.appendChild(polishButton);
-
     copyButton = document.createElement('button');
     copyButton.type = 'button';
     copyButton.className = 'ekko-transcribe-actions__copy';
@@ -857,9 +853,14 @@ if (window.top !== window.self) {
     copyButton.title = 'Copy transcript';
     copyButton.addEventListener('click', handleCopyTranscript);
 
+    const polishRow = document.createElement('div');
+    polishRow.className = 'ekko-transcribe-actions__row';
+    polishRow.appendChild(rewriteSelect);
+    polishRow.appendChild(polishButton);
+    polishRow.appendChild(copyButton);
+
     transcribeActionsRow.appendChild(refineButton);
-    transcribeActionsRow.appendChild(polishGroup);
-    transcribeActionsRow.appendChild(copyButton);
+    transcribeActionsRow.appendChild(polishRow);
 
     regenerateButton = document.createElement('button');
     regenerateButton.type = 'button';
