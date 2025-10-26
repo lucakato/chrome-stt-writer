@@ -1101,8 +1101,7 @@ if (window.top !== window.self) {
     }
     if (enabled) {
       await delay(TEMP_DIRECT_INSERT_DELAY_MS);
-    }
-    if (!enabled) {
+    } else {
       applyPendingBridgeMessage();
     }
   }
