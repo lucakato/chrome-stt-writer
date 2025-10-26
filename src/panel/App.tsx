@@ -39,6 +39,12 @@ import { IoMicOffSharp } from 'react-icons/io5';
 
 type Mode = 'transcribe' | 'compose';
 
+const TEMP_DIRECT_INSERT_DELAY_MS = 150;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 type RewritePreset =
   | 'concise-formal'
   | 'expand'
@@ -214,7 +220,7 @@ export default function App() {
 
   const [transcript, setTranscript] = useState('');
   const [rewritePreset, setRewritePreset] = useState<RewritePreset>('concise-formal');
-  const [directInsertEnabled, setDirectInsertEnabled] = useState(true);
+  const [directInsertEnabledState, setDirectInsertEnabledState] = useState(true);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [streamingSummary, setStreamingSummary] = useState<string | null>(null);
   const [language, setLanguage] = useState<string>(() => navigator.language ?? 'en-US');
@@ -229,6 +235,7 @@ const [summarizerState, setSummarizerState] = useState<'idle' | 'checking' | Rew
   const [rewriterError, setRewriterError] = useState<string | null>(null);
   const [rewriterMessage, setRewriterMessage] = useState<string | null>(null);
   const [rewritePreview, setRewritePreview] = useState<string | null>(null);
+  const [insertBusy, setInsertBusy] = useState(false);
 
   const [promptAvailabilityState, setPromptAvailabilityState] = useState<'idle' | 'checking' | PromptAvailabilityStatus>('idle');
   const [promptAvailabilityMessage, setPromptAvailabilityMessage] = useState<string | null>(null);
@@ -242,6 +249,7 @@ const [summarizerState, setSummarizerState] = useState<'idle' | 'checking' | Rew
   const lastDirectInsertValueRef = useRef<string>('');
   const lastStructuredTranscriptRef = useRef<string>('');
   const structuredInsertAbortRef = useRef<AbortController | null>(null);
+  const directInsertEnabledRef = useRef(directInsertEnabledState);
   const composeRecorderRef = useRef<MediaRecorder | null>(null);
   const composeChunksRef = useRef<Blob[]>([]);
   const composeTimerRef = useRef<number | null>(null);
@@ -251,6 +259,30 @@ const [summarizerState, setSummarizerState] = useState<'idle' | 'checking' | Rew
   const composeEntryIdRef = useRef<string | null>(null);
 const composeSessionRef = useRef<LanguageModelSession | null>(null);
 const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(null);
+
+  const directInsertEnabled = directInsertEnabledState;
+
+  const setDirectInsertEnabled = useCallback((enabled: boolean) => {
+    setDirectInsertEnabledState(enabled);
+    directInsertEnabledRef.current = enabled;
+  }, []);
+
+  const refreshDirectInsertState = useCallback(async () => {
+    if (!chrome.runtime?.sendMessage) {
+      return;
+    }
+    try {
+      const response = (await chrome.runtime.sendMessage({
+        type: 'ekko/direct-insert/query'
+      } satisfies EkkoMessage)) as EkkoResponse | undefined;
+      if (response && response.ok && response.data && typeof response.data === 'object') {
+        const enabled = !!(response.data as { enabled?: boolean }).enabled;
+        setDirectInsertEnabled(enabled);
+      }
+    } catch (error) {
+      console.warn('Unable to refresh direct insert state', error);
+    }
+  }, [setDirectInsertEnabled]);
 
   useEffect(() => {
     const sendState = (open: boolean, tabId?: number, windowId?: number) => {
@@ -830,6 +862,68 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
     [deliverDirectInsertDraft, outputLanguage]
   );
 
+  const toggleDirectInsertBridge = useCallback(
+    async (
+      enabled: boolean,
+      {
+        preserveHistory = false,
+        updateUiState = true
+      }: { preserveHistory?: boolean; updateUiState?: boolean } = {}
+    ) => {
+      const runtime = chrome.runtime;
+      if (!runtime?.sendMessage) {
+        throw new Error('Chrome runtime unavailable for direct insert toggle.');
+      }
+      const response = await runtime
+        .sendMessage({
+          type: 'ekko/direct-insert/toggle',
+          payload: { enabled }
+        } satisfies EkkoMessage)
+        .catch((error) => {
+          console.warn('Unable to toggle direct insert bridge', error);
+          throw error;
+        });
+      if (response && typeof response === 'object' && 'ok' in response && !(response as { ok?: boolean }).ok) {
+        const message = (response as { error?: string }).error ?? 'Unable to toggle Direct Insert Mode.';
+        throw new Error(message);
+      }
+      if (updateUiState) {
+        setDirectInsertEnabled(enabled);
+        if (!enabled && !preserveHistory) {
+          lastDirectInsertValueRef.current = '';
+        }
+      }
+      if (enabled) {
+        await sleep(TEMP_DIRECT_INSERT_DELAY_MS);
+      }
+    },
+    []
+  );
+
+  const runWithDirectInsertBridge = useCallback(
+    async <T,>(task: () => Promise<T>): Promise<T> => {
+      if (directInsertEnabledRef.current) {
+        return task();
+      }
+      let autoEnabled = false;
+      await toggleDirectInsertBridge(true, { preserveHistory: true, updateUiState: false });
+      autoEnabled = true;
+      try {
+        return await task();
+      } finally {
+        if (autoEnabled && !directInsertEnabledRef.current) {
+          try {
+            await toggleDirectInsertBridge(false, { preserveHistory: true, updateUiState: false });
+          } catch (error) {
+            console.warn('Unable to disable direct insert bridge after temporary use', error);
+            void refreshDirectInsertState();
+          }
+        }
+      }
+    },
+    [refreshDirectInsertState, toggleDirectInsertBridge]
+  );
+
   const handleInsertTranscript = useCallback(async () => {
     const text = activeTranscript.trim();
     if (!text) {
@@ -837,43 +931,62 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
       return;
     }
 
-    if (!directInsertEnabled) {
-      setSummarizerMessage('Enable Direct Insert Mode to insert into page.');
+    if (insertBusy || isSummarizerBusy || isRewriterBusy) {
       return;
     }
 
+    setInsertBusy(true);
     setSummarizerError(null);
-    setSummarizerMessage('Inserting into page…');
+    setSummarizerMessage(
+      directInsertEnabled ? 'Inserting into page…' : 'Temporarily enabling Direct Insert Mode…'
+    );
 
     try {
-      await insertTranscriptIntoPage(text);
+      await runWithDirectInsertBridge(() => insertTranscriptIntoPage(text));
       lastDirectInsertValueRef.current = text;
       lastStructuredTranscriptRef.current = text;
       setSummarizerMessage('Draft inserted into page.');
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to insert transcript.';
-      setSummarizerError(message);
-      setSummarizerMessage(null);
       console.warn('Unable to insert transcript into page', error);
+      try {
+        await navigator.clipboard.writeText(text);
+        setSummarizerMessage('Copied to clipboard instead.');
+      } catch (copyError) {
+        console.warn('Unable to copy transcript after insert failure', copyError);
+        setSummarizerError(message);
+        setSummarizerMessage(null);
+      }
+    } finally {
+      setInsertBusy(false);
     }
-  }, [activeTranscript, directInsertEnabled, insertTranscriptIntoPage]);
+  }, [
+    activeTranscript,
+    directInsertEnabled,
+    insertBusy,
+    insertTranscriptIntoPage,
+    isRewriterBusy,
+    isSummarizerBusy,
+    runWithDirectInsertBridge
+  ]);
 
   const handleDirectInsertToggle = useCallback(
     (enabled: boolean) => {
+      const previous = directInsertEnabledRef.current;
       setDirectInsertEnabled(enabled);
-      chrome.runtime
-        ?.sendMessage({
-          type: 'ekko/direct-insert/toggle',
-          payload: { enabled }
-        } satisfies EkkoMessage)
-        .catch((error: unknown) => {
-          console.warn('Unable to toggle direct insert bridge', error);
-        });
       if (!enabled) {
         lastDirectInsertValueRef.current = '';
       }
+      void toggleDirectInsertBridge(enabled, { updateUiState: false })
+        .then(() => {
+          void refreshDirectInsertState();
+        })
+        .catch((error) => {
+          console.warn('Unable to toggle direct insert bridge from UI', error);
+          setDirectInsertEnabled(previous);
+        });
     },
-    []
+    [refreshDirectInsertState, setDirectInsertEnabled, toggleDirectInsertBridge]
   );
 
   const openMicrophoneSettings = useCallback(() => {
@@ -1710,16 +1823,27 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
                 className="button button--primary"
                 disabled={
                   !activeTranscript ||
+                  isRecording ||
+                  insertBusy ||
                   isSummarizerBusy ||
-                  summarizerUnavailable ||
-                  isRewriterBusy ||
-                  rewriterUnavailable ||
-                  !directInsertEnabled
+                  isRewriterBusy
                 }
                 onClick={handleInsertTranscript}
-                title={directInsertEnabled ? 'Insert transcript into page' : 'Enable Direct Insert Mode to insert'}
+                title={
+                  !activeTranscript
+                    ? 'Speak or type a transcript first'
+                    : isRecording
+                    ? 'Stop recording to insert'
+                    : insertBusy
+                    ? 'Insert in progress…'
+                    : isSummarizerBusy || isRewriterBusy
+                    ? 'Wait for the current action to finish'
+                    : !directInsertEnabled
+                    ? 'Insert will temporarily enable Direct Insert Mode'
+                    : 'Insert transcript into page'
+                }
               >
-                Insert
+                {insertBusy ? 'Inserting…' : 'Insert'}
               </button>
             </div>
             <div className="summary-status" aria-live="polite">

@@ -47,6 +47,7 @@ const ICON_COPY = iconMarkup(FiCopy);
 const ICON_INSERT = iconMarkup(FiCornerDownRight);
 const ICON_MIC_PROCESSING = '<span aria-hidden="true">⏳</span>';
 const WIDGET_COMPOSE_MAX_DURATION_MS = 90_000;
+const TEMP_DIRECT_INSERT_DELAY_MS = 150;
 
 type WidgetRewritePreset =
   | 'concise-formal'
@@ -190,12 +191,13 @@ if (window.top !== window.self) {
   let refineButton: HTMLButtonElement | null = null;
   let polishButton: HTMLButtonElement | null = null;
   let copyButton: HTMLButtonElement | null = null;
-  let insertButton: HTMLButtonElement | null = null;
   let rewriteSelect: HTMLSelectElement | null = null;
+  let insertButton: HTMLButtonElement | null = null;
   let refineBusy = false;
   let rewriterBusy = false;
   let rewritePreset: WidgetRewritePreset = 'concise-formal';
   let transcribeOutputKind: 'raw' | 'refine' | 'polish' | 'other' = 'raw';
+  let insertBusy = false;
 
   let root: HTMLDivElement | null = null;
   let triggerButton: HTMLButtonElement | null = null;
@@ -208,6 +210,7 @@ if (window.top !== window.self) {
   let timerLabel: HTMLSpanElement | null = null;
   let modeButtons: { transcribe: HTMLButtonElement; compose: HTMLButtonElement } | null = null;
   let directInsertEnabled = false;
+  let tempDirectInsertDepth = 0;
 
   function ensureStyle() {
     if (document.getElementById('ekko-floating-widget-style')) return;
@@ -484,13 +487,39 @@ if (window.top !== window.self) {
     updateActionButtonStates();
   }
 
+  let pendingBridgeMessage: { type: 'toggle' | 'initialized'; enabled: boolean } | null = null;
+  let pendingBridgeNeedsRefresh = false;
+
+  function applyPendingBridgeMessage() {
+    if (tempDirectInsertDepth === 0) {
+      if (pendingBridgeNeedsRefresh) {
+        pendingBridgeNeedsRefresh = false;
+        queryDirectInsertState();
+        pendingBridgeMessage = null;
+        return;
+      }
+      if (pendingBridgeMessage) {
+        setDirectInsertState(pendingBridgeMessage.enabled);
+        pendingBridgeMessage = null;
+      }
+    }
+  }
+
   function handleDirectInsertToggleMessage(message: EkkoMessage) {
     if (message.type === 'ekko/direct-insert/toggle') {
       const enabled = !!(message.payload as { enabled?: boolean }).enabled;
-      setDirectInsertState(enabled);
+      if (tempDirectInsertDepth === 0) {
+        setDirectInsertState(enabled);
+      } else {
+        pendingBridgeMessage = { type: 'toggle', enabled };
+      }
     } else if (message.type === 'ekko/direct-insert/initialized') {
       const enabled = !!(message.payload as { enabled?: boolean }).enabled;
-      setDirectInsertState(enabled);
+      if (tempDirectInsertDepth === 0) {
+        setDirectInsertState(enabled);
+      } else {
+        pendingBridgeMessage = { type: 'initialized', enabled };
+      }
     }
   }
 
@@ -564,10 +593,12 @@ if (window.top !== window.self) {
     }
   }
 
-  async function insertTranscriptText(
-    text: string,
-    options: { skipStructuring?: boolean } = {}
-  ) {
+  type InsertTranscriptOptions = {
+    skipStructuring?: boolean;
+    forceStructure?: boolean;
+  };
+
+  async function insertTranscriptText(text: string, options: InsertTranscriptOptions = {}) {
     const trimmed = text.trim();
     let payload:
       | {
@@ -580,7 +611,8 @@ if (window.top !== window.self) {
       | { text: string }
       | null = null;
 
-    const shouldStructure = directInsertEnabled && trimmed && !options.skipStructuring;
+    const shouldStructure =
+      trimmed && !options.skipStructuring && (directInsertEnabled || options.forceStructure);
 
     if (shouldStructure) {
       setStatus('Preparing email draft…');
@@ -623,16 +655,25 @@ if (window.top !== window.self) {
       return;
     }
 
-    if (!directInsertEnabled) {
-      setStatus('Enable Direct Insert Mode to insert into page.');
+    const skipStructuring = transcribeOutputKind !== 'raw';
+
+    if (insertBusy) {
       return;
     }
 
-    const skipStructuring = transcribeOutputKind !== 'raw';
+    insertBusy = true;
+    updateActionButtonStates();
 
     try {
-      setStatus('Inserting into page…');
-      await insertTranscriptText(text, skipStructuring ? { skipStructuring: true } : undefined);
+      setStatus(
+        directInsertEnabled ? 'Inserting into page…' : 'Temporarily enabling Direct Insert Mode…'
+      );
+      await runWithDirectInsertBridge(() =>
+        insertTranscriptText(
+          text,
+          skipStructuring ? { skipStructuring: true } : { forceStructure: true }
+        )
+      );
       setStatus('Draft inserted into page.');
     } catch (error) {
       console.warn('Unable to insert transcript output', error);
@@ -643,6 +684,7 @@ if (window.top !== window.self) {
         setStatus(error instanceof Error ? error.message : 'Unable to insert transcript.');
       }
     } finally {
+      insertBusy = false;
       updateActionButtonStates();
     }
   }
@@ -1001,6 +1043,92 @@ if (window.top !== window.self) {
     }
   }
 
+  function delay(ms: number) {
+    return new Promise((resolve) => window.setTimeout(resolve, ms));
+  }
+
+  async function toggleDirectInsertBridge(
+    enabled: boolean,
+    { updateUiState = true }: { updateUiState?: boolean } = {}
+  ) {
+    const runtime = chrome.runtime;
+    if (!runtime?.sendMessage) {
+      throw new Error('Chrome runtime unavailable for direct insert toggle.');
+    }
+    const adjustDepth = () => {
+      if (!updateUiState) {
+        if (enabled) {
+          tempDirectInsertDepth += 1;
+        } else if (tempDirectInsertDepth > 0) {
+          tempDirectInsertDepth -= 1;
+        }
+      }
+    };
+
+    const rollbackDepth = () => {
+      if (!updateUiState) {
+        if (enabled && tempDirectInsertDepth > 0) {
+          tempDirectInsertDepth -= 1;
+        } else if (!enabled) {
+          tempDirectInsertDepth += 1;
+        }
+      }
+    };
+
+    adjustDepth();
+    const response = await runtime
+      .sendMessage({
+        type: 'ekko/direct-insert/toggle',
+        payload: { enabled }
+      } satisfies EkkoMessage)
+      .catch((error) => {
+        console.warn('Unable to toggle direct insert bridge', error);
+        rollbackDepth();
+        throw error;
+      });
+    if (
+      response &&
+      typeof response === 'object' &&
+      'ok' in response &&
+      !(response as { ok?: boolean }).ok
+    ) {
+      const message = (response as { error?: string }).error ?? 'Unable to toggle Direct Insert Mode.';
+      rollbackDepth();
+      throw new Error(message);
+    }
+    if (updateUiState) {
+      setDirectInsertState(enabled);
+    }
+    if (enabled) {
+      await delay(TEMP_DIRECT_INSERT_DELAY_MS);
+    }
+    if (!enabled) {
+      applyPendingBridgeMessage();
+    }
+  }
+
+  async function runWithDirectInsertBridge<T>(task: () => Promise<T>): Promise<T> {
+    if (directInsertEnabled) {
+      return task();
+    }
+    let autoEnabled = false;
+    await toggleDirectInsertBridge(true, { updateUiState: false });
+    autoEnabled = true;
+    try {
+      return await task();
+    } finally {
+      if (autoEnabled) {
+        try {
+          await toggleDirectInsertBridge(false, { updateUiState: false });
+        } catch (error) {
+          console.warn('Unable to disable direct insert bridge after temporary use', error);
+          pendingBridgeNeedsRefresh = true;
+        }
+      }
+      applyPendingBridgeMessage();
+    }
+  }
+
   async function composeTranscriptDraft(text: string): Promise<ComposeDraftResult | null> {
     const trimmed = text.trim();
     if (!trimmed) {
@@ -1162,13 +1290,25 @@ if (window.top !== window.self) {
     if (insertButton) {
       const canInsert =
         !!transcribeOutputValue &&
+        recorderState === 'idle' &&
         !refineBusy &&
         !rewriterBusy &&
-        recorderState === 'idle' &&
-        directInsertEnabled;
+        !insertBusy;
       insertButton.disabled = !canInsert;
-      insertButton.innerHTML = ICON_INSERT;
-      insertButton.title = canInsert ? 'Insert into page' : 'Enable Direct Insert Mode to insert';
+      insertButton.innerHTML = insertBusy ? ICON_MIC_PROCESSING : ICON_INSERT;
+      let insertTooltip = 'Insert into page';
+      if (!transcribeOutputValue) {
+        insertTooltip = 'Speak or type a transcript first';
+      } else if (recorderState !== 'idle') {
+        insertTooltip = 'Stop recording to insert';
+      } else if (refineBusy || rewriterBusy) {
+        insertTooltip = 'Wait for the current action to finish';
+      } else if (insertBusy) {
+        insertTooltip = 'Insert in progress…';
+      } else if (!directInsertEnabled) {
+        insertTooltip = 'Insert will temporarily enable Direct Insert Mode';
+      }
+      insertButton.title = insertTooltip;
     }
   }
 
@@ -1303,12 +1443,11 @@ if (window.top !== window.self) {
     setTranscribeOutput(text || null, 'raw');
 
     if (text) {
-      recorderState = 'processing';
-      updateMicUi();
-      const shouldInsert = directInsertEnabled;
-      if (shouldInsert) {
+      if (directInsertEnabled) {
+        recorderState = 'processing';
+        updateMicUi();
         setStatus('Preparing email draft…');
-        insertTranscriptText(text)
+        runWithDirectInsertBridge(() => insertTranscriptText(text, { forceStructure: true }))
           .then(() => {
             setStatus('Draft inserted into page.');
           })
