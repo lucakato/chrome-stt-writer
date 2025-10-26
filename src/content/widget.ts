@@ -655,8 +655,6 @@ if (window.top !== window.self) {
       return;
     }
 
-    const skipStructuring = transcribeOutputKind !== 'raw';
-
     if (insertBusy) {
       return;
     }
@@ -669,10 +667,7 @@ if (window.top !== window.self) {
         directInsertEnabled ? 'Inserting into page…' : 'Temporarily enabling Direct Insert Mode…'
       );
       await runWithDirectInsertBridge(() =>
-        insertTranscriptText(
-          text,
-          skipStructuring ? { skipStructuring: true } : { forceStructure: true }
-        )
+        insertTranscriptText(text, { forceStructure: true })
       );
       setStatus('Draft inserted into page.');
     } catch (error) {
