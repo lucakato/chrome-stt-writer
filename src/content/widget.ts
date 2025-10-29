@@ -147,6 +147,7 @@ const WIDGET_REFINE_CONTEXT =
   'Polish the text by fixing grammar mistakes, removing redundant or filler wording, and keeping the tone natural.';
 
 type RecordingState = 'idle' | 'recording' | 'processing';
+type StatusTone = 'muted' | 'danger';
 
 declare global {
   interface Window {
@@ -319,7 +320,26 @@ if (window.top !== window.self) {
         gap: 8px;
         margin-top: 12px;
       }
-      .ekko-popup__status,
+      .ekko-popup__status {
+        font-size: 0.75rem;
+        color: #4c4c70;
+        flex: 1;
+        display: none;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+        min-height: 1.2rem;
+      }
+      .ekko-popup__status--pill {
+        padding: 4px 10px;
+        border-radius: 999px;
+        font-weight: 600;
+      }
+      .ekko-popup__status--danger {
+        background: rgba(192, 54, 44, 0.15);
+        border: 1px solid rgba(192, 54, 44, 0.25);
+        color: #651b1b;
+      }
       .ekko-popup__timer {
         font-size: 0.75rem;
         color: #4c4c70;
@@ -651,7 +671,7 @@ if (window.top !== window.self) {
   async function handleInsertTranscript() {
     const text = transcribeOutputValue.trim();
     if (!text) {
-      setStatus('Nothing to insert yet.');
+      setStatus('Nothing to insert yet.', 'danger');
       return;
     }
 
@@ -676,7 +696,7 @@ if (window.top !== window.self) {
       if (copied) {
         setStatus('Copied to clipboard instead.');
       } else {
-        setStatus(error instanceof Error ? error.message : 'Unable to insert transcript.');
+        setStatus(error instanceof Error ? error.message : 'Unable to insert transcript.', 'danger');
       }
     } finally {
       insertBusy = false;
@@ -701,7 +721,7 @@ if (window.top !== window.self) {
     if (!draft || !draft.content.trim()) {
       setComposeOutput(null);
       setComposeOutput('Compose returned no response.');
-      setStatus('Compose returned no response.');
+      setStatus('Compose returned no response.', 'danger');
       return false;
     }
 
@@ -724,7 +744,7 @@ if (window.top !== window.self) {
       }
       const message = error instanceof Error ? error.message : 'Compose failed.';
       setComposeOutput(message);
-      setStatus(message);
+      setStatus(message, 'danger');
       return false;
     }
   }
@@ -898,7 +918,7 @@ if (window.top !== window.self) {
         }
       } catch (error) {
         console.warn('Unable to open Ekko side panel from widget', error);
-        setStatus('Unable to open settings.');
+        setStatus('Unable to open settings.', 'danger');
       }
     });
 
@@ -1028,13 +1048,27 @@ if (window.top !== window.self) {
     updateActionButtonStates();
   }
 
-  function setStatus(text: string) {
-    if (statusLabel) {
-      if (settings.mode === 'compose' || settings.mode === 'transcribe') {
-        statusLabel.textContent = '';
-      } else {
-        statusLabel.textContent = text;
-      }
+  function setStatus(text: string, tone: StatusTone = 'muted') {
+    if (!statusLabel) {
+      return;
+    }
+    const trimmed = text.trim();
+    const isError = tone === 'danger';
+    const shouldShow = trimmed.length > 0;
+
+    statusLabel.classList.remove('ekko-popup__status--pill', 'ekko-popup__status--danger');
+
+    if (!shouldShow) {
+      statusLabel.textContent = '';
+      statusLabel.style.display = 'none';
+      return;
+    }
+
+    statusLabel.textContent = trimmed;
+    statusLabel.style.display = 'flex';
+
+    if (isError) {
+      statusLabel.classList.add('ekko-popup__status--pill', 'ekko-popup__status--danger');
     }
   }
 
@@ -1398,7 +1432,7 @@ if (window.top !== window.self) {
 
     recognition.onerror = (event) => {
       if (event.error !== 'aborted') {
-        setStatus(event.message || `Speech recognition error: ${event.error}`);
+        setStatus(event.message || `Speech recognition error: ${event.error}`, 'danger');
       }
       stopTranscribe();
     };
@@ -1451,7 +1485,7 @@ if (window.top !== window.self) {
             if (copied) {
               setStatus('Copied to clipboard.');
             } else {
-              setStatus(error instanceof Error ? error.message : 'Unable to insert transcript.');
+              setStatus(error instanceof Error ? error.message : 'Unable to insert transcript.', 'danger');
             }
           })
           .finally(() => {
@@ -1537,7 +1571,7 @@ if (window.top !== window.self) {
         }
       } catch (error) {
         console.warn('Compose failed', error);
-        setStatus(error instanceof Error ? error.message : 'Compose failed.');
+        setStatus(error instanceof Error ? error.message : 'Compose failed.', 'danger');
       } finally {
         mediaStream?.getTracks().forEach((track) => track.stop());
         mediaStream = null;
@@ -1617,7 +1651,7 @@ if (window.top !== window.self) {
         console.warn('Unable to start compose recording', error);
         recorderState = 'idle';
         updateMicUi();
-        setStatus(error instanceof Error ? error.message : 'Unable to start recording.');
+        setStatus(error instanceof Error ? error.message : 'Unable to start recording.', 'danger');
       });
     } else {
       startTranscribe()
@@ -1629,7 +1663,7 @@ if (window.top !== window.self) {
           console.warn('Unable to start transcription', error);
           recorderState = 'idle';
           updateMicUi();
-          setStatus(error instanceof Error ? error.message : 'Unable to start recording.');
+          setStatus(error instanceof Error ? error.message : 'Unable to start recording.', 'danger');
         });
     }
   }
@@ -1639,12 +1673,12 @@ if (window.top !== window.self) {
       return;
     }
     if (!hasComposeRecording) {
-      setStatus('Record first, then try re-generate.');
+      setStatus('Record first, then try re-generate.', 'danger');
       return;
     }
 
     if (!lastComposeAudio) {
-      setStatus('Record again before regenerating.');
+      setStatus('Record again before regenerating.', 'danger');
       return;
     }
     const audioBuffer = lastComposeAudio.slice(0);
@@ -1665,7 +1699,7 @@ if (window.top !== window.self) {
       }
     } catch (error) {
       console.warn('Compose regenerate failed', error);
-      setStatus(error instanceof Error ? error.message : 'Compose failed.');
+      setStatus(error instanceof Error ? error.message : 'Compose failed.', 'danger');
     } finally {
       recorderState = 'idle';
       updateMicUi();
@@ -1716,14 +1750,15 @@ if (window.top !== window.self) {
         } catch (insertError) {
           console.warn('Unable to insert refined text', insertError);
           const copied = await copyToClipboard(refined);
-          setStatus(copied ? 'Refined text copied to clipboard.' : 'Unable to insert refined text.');
+          const message = copied ? 'Refined text copied to clipboard.' : 'Unable to insert refined text.';
+          setStatus(message, copied ? 'muted' : 'danger');
         }
       } else {
         setStatus('Refined text ready.');
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Refine request failed.';
-      setStatus(message);
+      setStatus(message, 'danger');
       setTranscribeOutput(text, 'raw');
     } finally {
       refineBusy = false;
@@ -1777,7 +1812,8 @@ if (window.top !== window.self) {
         } catch (insertError) {
           console.warn('Unable to insert polished text', insertError);
           const copied = await copyToClipboard(polished);
-          setStatus(copied ? 'Polished text copied to clipboard.' : 'Unable to insert polished text.');
+          const message = copied ? 'Polished text copied to clipboard.' : 'Unable to insert polished text.';
+          setStatus(message, copied ? 'muted' : 'danger');
         }
       } else {
         setStatus(`Polished using ${preset.label}.`);
@@ -1787,7 +1823,7 @@ if (window.top !== window.self) {
       if (/enough space/i.test(message)) {
         message = 'Chrome needs about 22 GB of free space to download the Gemini Nano model.';
       }
-      setStatus(message);
+      setStatus(message, 'danger');
       setTranscribeOutput(text, 'raw');
     } finally {
       rewriterBusy = false;
@@ -1805,7 +1841,7 @@ if (window.top !== window.self) {
     if (copied) {
       setStatus('Copied to clipboard.');
     } else {
-      setStatus('Unable to copy text.');
+      setStatus('Unable to copy text.', 'danger');
     }
   }
 

@@ -8,6 +8,9 @@
   --text-secondary: #4c4c70;
   --border: rgba(89, 104, 242, 0.2);
   --error: #c0362c;
+  --error-pill-bg: rgba(192, 54, 44, 0.12);
+  --error-pill-border: rgba(192, 54, 44, 0.2);
+  --error-pill-text: #651b1b;
   font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   background-color: var(--surface);
   color: var(--text-primary);
@@ -295,6 +298,13 @@ body {
   border-color: transparent;
 }
 
+.transcript-area--hint-small::placeholder,
+.transcript-area--hint-small::-webkit-input-placeholder {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  opacity: 0.9;
+}
+
 .actions-toolbar {
   display: flex;
   gap: 12px;
@@ -391,42 +401,30 @@ body {
 .compose-status {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
   font-size: 0.8rem;
   color: var(--text-secondary);
+  align-items: flex-start;
 }
 
 .compose-status__error {
-  color: var(--error);
+  color: inherit;
 }
 
-.compose-chip-group {
+.compose-style {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  flex-direction: column;
+  gap: 6px;
 }
 
-.compose-chip {
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 8px 12px;
-  font-size: 0.8rem;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+.compose-style__label {
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-weight: 600;
 }
 
-.compose-chip:hover {
-  background: rgba(89, 104, 242, 0.08);
-  color: var(--ekko-primary);
-}
-
-.compose-chip--active {
-  background: var(--ekko-primary);
-  border-color: var(--ekko-primary);
-  color: #ffffff;
-  box-shadow: 0 6px 14px rgba(89, 104, 242, 0.25);
+.compose-style__select {
+  width: 100%;
 }
 
 .compose-output {
@@ -539,10 +537,22 @@ body {
   margin: 4px 0 0;
   font-size: 0.8rem;
   color: var(--text-secondary);
+  line-height: 1.4;
 }
 
 .helper-text.danger {
-  color: var(--error);
+  color: var(--error-pill-text);
+  background: var(--error-pill-bg);
+  border: 1px solid var(--error-pill-border);
+  padding: 6px 12px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  flex-wrap: wrap;
+  max-width: 100%;
+  align-self: flex-start;
 }
 
 .text-button {
@@ -642,6 +652,9 @@ body {
     --text-primary: #f3f4ff;
     --text-secondary: #b5b9d5;
     --border: rgba(174, 182, 255, 0.35);
+    --error-pill-bg: rgba(192, 54, 44, 0.3);
+    --error-pill-border: rgba(192, 54, 44, 0.45);
+    --error-pill-text: #ffd7cf;
   }
 
   .panel-section {

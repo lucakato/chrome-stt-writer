@@ -102,32 +102,28 @@ const rewritePresets: Array<{ id: RewritePreset; label: string }> = [
   { id: 'custom', label: 'Custom instructions' }
 ];
 
-const composePresets: Array<{ id: ComposePresetId; label: string; systemPrompt: string; helper: string }> = [
+const composePresets: Array<{ id: ComposePresetId; label: string; systemPrompt: string }> = [
   {
     id: 'freeform',
     label: 'Freeform',
-    helper: 'Great for open-ended questions or ideation.',
     systemPrompt:
       'You are Ekko, an on-device writing assistant. Listen carefully and return a direct, helpful answer the user can use immediately. Reply in the user’s language, keep it concise, and avoid meta commentary or extra instructions.'
   },
   {
     id: 'email-formal',
     label: 'Formal email',
-    helper: 'Draft polished outreach or apology emails.',
     systemPrompt:
       'You help users draft formal, polite emails. Produce the finished email text (include a subject line and sign-off when appropriate). Provide only the email—do not add guidance or commentary.'
   },
   {
     id: 'summary',
     label: 'Summary',
-    helper: 'Turn thoughts into concise summaries.',
     systemPrompt:
       'You summarize the user’s spoken input into a concise digest. Present only the distilled summary in clear prose or bullet points, without extra advice or explanation.'
   },
   {
     id: 'action-plan',
     label: 'Action plan',
-    helper: 'Outline next steps with clarity.',
     systemPrompt:
       'You produce a clear action plan based on the user’s spoken intent. Return only the actionable steps (numbered or bullet list), keeping each step direct and free of meta commentary.'
   }
@@ -1879,55 +1875,6 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
             <p className="helper-text">
               Speak naturally—Gemini Nano will listen and draft the content for you.
             </p>
-            <div>
-              <p className="helper-text" style={{ marginBottom: '4px' }}>
-                Draft style
-              </p>
-              <div className="compose-chip-group" role="listbox" aria-label="Compose style">
-                {composePresets.map((preset) => (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    role="option"
-                    aria-selected={composePreset === preset.id}
-                    className={`compose-chip ${composePreset === preset.id ? 'compose-chip--active' : ''}`}
-                    onClick={() => setComposePreset(preset.id)}
-                  >
-                    {preset.label}
-                  </button>
-                ))}
-              </div>
-              <p className="helper-text" style={{ marginTop: '4px' }}>
-                {activeComposePreset.helper}
-              </p>
-            </div>
-            <label htmlFor="compose-instruction" className="helper-text" style={{ fontWeight: 600 }}>
-              Optional typed context
-            </label>
-            <textarea
-              id="compose-instruction"
-              className="transcript-area"
-              style={{ minHeight: '80px' }}
-              placeholder="Add details Gemini should know (recipient, tone, bullet points)…"
-              value={composePrompt}
-              onChange={(event) => {
-                const value = event.target.value;
-                setSettings((prev) => ({ ...prev, composePrompt: value }));
-                if (composePromptDebounceRef.current) {
-                  window.clearTimeout(composePromptDebounceRef.current);
-                }
-                composePromptDebounceRef.current = window.setTimeout(() => {
-                  applySettings({ composePrompt: value });
-                }, 400);
-              }}
-              onBlur={() => {
-                if (composePromptDebounceRef.current) {
-                  window.clearTimeout(composePromptDebounceRef.current);
-                  composePromptDebounceRef.current = null;
-                }
-                applySettings({ composePrompt });
-              }}
-            />
             <div className="compose-controls">
               <button
                 type="button"
@@ -1958,12 +1905,56 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
                 {formatDuration(composeElapsedMs)} / {formatDuration(COMPOSE_MAX_DURATION_MS)}
               </span>
             </div>
+            <div className="compose-style">
+              <label htmlFor="compose-style-select" className="helper-text compose-style__label">
+                Style
+              </label>
+              <select
+                id="compose-style-select"
+                className="select compose-style__select"
+                value={composePreset}
+                onChange={(event) => setComposePreset(event.target.value as ComposePresetId)}
+              >
+                {composePresets.map((preset) => (
+                  <option key={preset.id} value={preset.id}>
+                    {preset.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <label htmlFor="compose-instruction" className="helper-text" style={{ fontWeight: 600 }}>
+              Optional typed context
+            </label>
+            <textarea
+              id="compose-instruction"
+              className="transcript-area transcript-area--hint-small"
+              style={{ minHeight: '80px' }}
+              placeholder="Add details Gemini should know (recipient, tone, bullet points)…"
+              value={composePrompt}
+              onChange={(event) => {
+                const value = event.target.value;
+                setSettings((prev) => ({ ...prev, composePrompt: value }));
+                if (composePromptDebounceRef.current) {
+                  window.clearTimeout(composePromptDebounceRef.current);
+                }
+                composePromptDebounceRef.current = window.setTimeout(() => {
+                  applySettings({ composePrompt: value });
+                }, 400);
+              }}
+              onBlur={() => {
+                if (composePromptDebounceRef.current) {
+                  window.clearTimeout(composePromptDebounceRef.current);
+                  composePromptDebounceRef.current = null;
+                }
+                applySettings({ composePrompt });
+              }}
+            />
             <div className="compose-status" aria-live="polite">
               {promptAvailabilityState === 'downloadable' && (
                 <p className="helper-text">Chrome is downloading the on-device model. Keep this tab open.</p>
               )}
               {promptAvailabilityMessage && <p className="helper-text">{promptAvailabilityMessage}</p>}
-              {composeError && <p className="helper-text compose-status__error">{composeError}</p>}
+              {composeError && <p className="helper-text danger compose-status__error">{composeError}</p>}
             </div>
           </section>
 
