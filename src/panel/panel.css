@@ -215,6 +215,33 @@ body {
   box-shadow: none;
 }
 
+.record-restart-button {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  border: 1px solid rgba(89, 104, 242, 0.25);
+  background: #ffffff;
+  color: var(--ekko-primary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.2s ease;
+}
+
+.record-restart-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 16px rgba(89, 104, 242, 0.25);
+  background: rgba(89, 104, 242, 0.08);
+}
+
+.record-restart-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
 .record-button__icon {
   width: 32px;
   height: 32px;

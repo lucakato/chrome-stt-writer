@@ -36,6 +36,7 @@ import {
 import { MdKeyboardVoice } from 'react-icons/md';
 import { LuAudioLines } from 'react-icons/lu';
 import { IoMicOffSharp } from 'react-icons/io5';
+import { FiRotateCcw } from 'react-icons/fi';
 
 type Mode = 'transcribe' | 'compose';
 
@@ -252,11 +253,20 @@ const [summarizerState, setSummarizerState] = useState<'idle' | 'checking' | Rew
   const composeStartTimeRef = useRef<number | null>(null);
   const composeAbortRef = useRef<AbortController | null>(null);
   const composeStreamRef = useRef<MediaStream | null>(null);
+  const composeCleanupPendingRef = useRef(false);
   const composeEntryIdRef = useRef<string | null>(null);
+  const composeStateRef = useRef(composeState);
+  const composeAbortNextRef = useRef(false);
+  const composeRestartPendingRef = useRef(false);
+  const restartTranscribePendingRef = useRef(false);
 const composeSessionRef = useRef<LanguageModelSession | null>(null);
 const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(null);
 
   const directInsertEnabled = directInsertEnabledState;
+
+  useEffect(() => {
+    composeStateRef.current = composeState;
+  }, [composeState]);
 
   const setDirectInsertEnabled = useCallback((enabled: boolean) => {
     setDirectInsertEnabledState(enabled);
@@ -389,6 +399,9 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
   }, [normalizedLanguage]);
 
   const appendFinalSegment = useCallback((segment: string) => {
+    if (restartTranscribePendingRef.current) {
+      return;
+    }
     setTranscript((prev) => {
       if (!prev) {
         return segment;
@@ -437,6 +450,71 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
       console.warn('Speech recognition failed to start.');
     }
   }, [isMicGranted, isRecording, requestPermission, resetSttError, startRecording, stopRecording, sttSupported]);
+
+  const handleRestartTranscribe = useCallback(async () => {
+    if (!isMicGranted) {
+      const granted = await requestPermission();
+      if (!granted) {
+        return;
+      }
+    }
+
+    if (!sttSupported && !isRecording) {
+      return;
+    }
+
+    structuredInsertAbortRef.current?.abort();
+    structuredInsertAbortRef.current = null;
+    setInsertBusy(false);
+    setStreamingSummary(null);
+    setSummarizerState('idle');
+    setSummarizerError(null);
+    setSummarizerMessage(null);
+    setDownloadProgress(null);
+    setRewriterState('idle');
+    setRewriterError(null);
+    setRewriterMessage(null);
+    setRewritePreview(null);
+    lastStructuredTranscriptRef.current = '';
+    setTranscript('');
+    clearInterim();
+    resetSttError();
+
+    if (isRecording) {
+      restartTranscribePendingRef.current = true;
+      stopRecording();
+      return;
+    }
+
+    if (!sttSupported) {
+      return;
+    }
+
+    const started = startRecording();
+    if (!started) {
+      console.warn('Speech recognition failed to start.');
+    }
+  }, [
+    clearInterim,
+    isMicGranted,
+    isRecording,
+    requestPermission,
+    resetSttError,
+    setDownloadProgress,
+    setInsertBusy,
+    setRewriterError,
+    setRewriterMessage,
+    setRewriterState,
+    setRewritePreview,
+    setStreamingSummary,
+    setSummarizerError,
+    setSummarizerMessage,
+    setSummarizerState,
+    setTranscript,
+    startRecording,
+    stopRecording,
+    sttSupported
+  ]);
 
   const displayTranscript = useMemo(() => {
     if (!isRecording || !interimTranscript) {
@@ -503,6 +581,45 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
       : composeMicAvailable
       ? 'Ready'
       : 'Microphone unavailable';
+  const transcribeRecordDisabled = micStatus === 'pending' || (!sttSupported && !isRecording);
+  const transcribeRecordTitle = transcribeRecordDisabled
+    ? micStatus === 'pending'
+      ? 'Microphone permission pending…'
+      : 'Speech recognition unavailable'
+    : isRecording
+    ? 'Stop recording'
+    : 'Start recording';
+  const transcribeRestartDisabled = transcribeRecordDisabled;
+  const transcribeRestartTitle = transcribeRestartDisabled
+    ? transcribeRecordTitle
+    : isRecording
+    ? 'Restart recording'
+    : 'Start new recording';
+  const composeRecordDisabled =
+    isComposeBusy ||
+    promptAvailabilityState === 'checking' ||
+    promptAvailabilityState === 'unsupported' ||
+    promptAvailabilityState === 'unavailable' ||
+    promptAvailabilityState === 'error';
+  const composeRecordTitle = composeRecordDisabled
+    ? promptAvailabilityState === 'checking'
+      ? 'Checking on-device model availability…'
+      : promptAvailabilityState === 'unsupported'
+      ? 'Compose is unsupported on this device'
+      : promptAvailabilityState === 'unavailable'
+      ? 'On-device model not ready'
+      : promptAvailabilityState === 'error'
+      ? 'Compose unavailable right now'
+      : 'Compose busy'
+    : isComposeRecording
+    ? 'Stop capture'
+    : 'Start capture';
+  const composeRestartDisabled = composeRecordDisabled;
+  const composeRestartTitle = composeRestartDisabled
+    ? composeRecordTitle
+    : isComposeRecording
+    ? 'Restart capture'
+    : 'Start new capture';
 
   const micMessages = useMemo(() => {
     const messages: ReactNode[] = [];
@@ -544,6 +661,26 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
     }
     return messages;
   }, [micError, micStatus, sttError, sttSupported]);
+
+  useEffect(() => {
+    if (!restartTranscribePendingRef.current || isRecording) {
+      return;
+    }
+    if (!isMicGranted) {
+      restartTranscribePendingRef.current = false;
+      return;
+    }
+    restartTranscribePendingRef.current = false;
+    if (!sttSupported) {
+      return;
+    }
+    resetSttError();
+    const started = startRecording();
+    if (!started) {
+      console.warn('Speech recognition failed to restart.');
+    }
+  }, [isMicGranted, isRecording, resetSttError, startRecording, sttSupported]);
+
 
   const showMicSettingsButton = micStatus === 'denied';
   const hasMicMessages = micMessages.length > 0;
@@ -1207,7 +1344,7 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
   );
 
   const handleStopComposeRecording = useCallback(
-    (auto = false) => {
+    (auto = false, { abort = false }: { abort?: boolean } = {}) => {
       if (composeState !== 'recording') {
         return;
       }
@@ -1221,8 +1358,14 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
         composeTimerRef.current = null;
       }
       composeStartTimeRef.current = null;
-      setComposeState('processing');
-      if (auto) {
+      if (abort) {
+        composeAbortNextRef.current = true;
+        setComposeState('idle');
+        setComposeError(null);
+      } else {
+        setComposeState('processing');
+      }
+      if (auto && !abort) {
         setComposeError('Recording paused after 90 seconds to keep sessions responsive.');
       }
       try {
@@ -1230,6 +1373,10 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
       } catch (error) {
         console.warn('Unable to stop compose recorder', error);
         setComposeState('idle');
+        if (abort) {
+          composeAbortNextRef.current = false;
+          composeRestartPendingRef.current = false;
+        }
       }
     },
     [composeState]
@@ -1243,7 +1390,7 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
       }
     }
 
-    if (composeState === 'recording') {
+    if (composeStateRef.current === 'recording') {
       handleStopComposeRecording();
       return;
     }
@@ -1285,17 +1432,41 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
       };
 
       recorder.onstop = async () => {
+        const stoppedStream = stream;
+        const stoppedRecorder = recorder;
         if (composeTimerRef.current) {
           window.clearInterval(composeTimerRef.current);
           composeTimerRef.current = null;
         }
         composeStartTimeRef.current = null;
-        composeRecorderRef.current = null;
-        composeStreamRef.current?.getTracks().forEach((track) => track.stop());
-        composeStreamRef.current = null;
+        setComposeElapsedMs(0);
+        if (composeRecorderRef.current === stoppedRecorder) {
+          composeRecorderRef.current = null;
+        }
+        stoppedStream.getTracks().forEach((track) => track.stop());
+        if (composeStreamRef.current === stoppedStream) {
+          composeStreamRef.current = null;
+        }
+
+        const aborted = composeAbortNextRef.current;
+        const restartPending = composeRestartPendingRef.current;
+        composeAbortNextRef.current = false;
+        composeCleanupPendingRef.current = false;
 
         const chunks = composeChunksRef.current;
         composeChunksRef.current = [];
+
+        if (aborted) {
+          setComposeDraft(null);
+          setComposeRawPreview('');
+          setComposeState('idle');
+          setComposeError(null);
+          composeEntryIdRef.current = null;
+          if (!restartPending) {
+            composeRestartPendingRef.current = false;
+          }
+          return;
+        }
 
         if (!chunks.length) {
           setComposeError('No audio captured. Try recording again.');
@@ -1315,6 +1486,8 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
           setComposeError(message);
           setComposeState('idle');
         }
+
+        composeRestartPendingRef.current = false;
       };
 
       recorder.onerror = (event) => {
@@ -1337,13 +1510,97 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
           handleStopComposeRecording(true);
         }
       }, 100);
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : 'Chrome could not access the microphone.';
-      setComposeError(message);
-      setComposeState('idle');
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : 'Chrome could not access the microphone.';
+    setComposeError(message);
+    setComposeState('idle');
+  }
+  }, [composeStateRef, ensurePromptSession, handleStopComposeRecording, isMicGranted, isPromptUnavailable, requestPermission, runCompose]);
+
+  const handleRestartComposeRecording = useCallback(async () => {
+    if (!isMicGranted) {
+      const granted = await requestPermission();
+      if (!granted) {
+        return;
+      }
     }
-  }, [composeState, ensurePromptSession, handleStopComposeRecording, isMicGranted, isPromptUnavailable, requestPermission, runCompose]);
+
+    composeAbortRef.current?.abort();
+    composeAbortRef.current = null;
+    setComposeDraft(null);
+    setComposeRawPreview('');
+    setComposeError(null);
+    setComposeElapsedMs(0);
+    composeChunksRef.current = [];
+    composeEntryIdRef.current = null;
+    composeStartTimeRef.current = null;
+    if (composeTimerRef.current) {
+      window.clearInterval(composeTimerRef.current);
+      composeTimerRef.current = null;
+    }
+
+    if (composeStateRef.current === 'recording') {
+      composeRestartPendingRef.current = true;
+      composeCleanupPendingRef.current = true;
+      handleStopComposeRecording(false, { abort: true });
+      return;
+    }
+
+    if (composeStateRef.current === 'processing' || composeStateRef.current === 'streaming') {
+      composeRestartPendingRef.current = true;
+      composeCleanupPendingRef.current = true;
+      return;
+    }
+
+    composeRestartPendingRef.current = false;
+    composeAbortNextRef.current = false;
+    composeCleanupPendingRef.current = false;
+
+    if (composeRecorderRef.current) {
+      try {
+        if (composeRecorderRef.current.state === 'recording') {
+          composeRecorderRef.current.stop();
+        }
+      } catch {
+        /* ignore */
+      }
+      composeRecorderRef.current = null;
+    }
+    composeStreamRef.current?.getTracks().forEach((track) => track.stop());
+    composeStreamRef.current = null;
+
+    if (composeStateRef.current === 'idle') {
+      void handleStartComposeRecording();
+    } else {
+      setComposeState('idle');
+      composeRestartPendingRef.current = true;
+      composeCleanupPendingRef.current = true;
+    }
+  }, [
+    handleStartComposeRecording,
+    handleStopComposeRecording,
+    isMicGranted,
+    requestPermission,
+    setComposeDraft,
+    setComposeElapsedMs,
+    setComposeError,
+    setComposeRawPreview,
+    setComposeState,
+    composeStateRef
+  ]);
+
+  useEffect(() => {
+    if (!composeRestartPendingRef.current) {
+      return;
+    }
+    if (composeState !== 'idle' || composeCleanupPendingRef.current) {
+      return;
+    }
+    composeRestartPendingRef.current = false;
+    composeAbortNextRef.current = false;
+    void handleStartComposeRecording();
+  }, [composeState, handleStartComposeRecording]);
 
   const handleCancelCompose = useCallback(() => {
     composeAbortRef.current?.abort();
@@ -1712,15 +1969,26 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
                   type="button"
                   className={`record-button ${isRecording ? 'record-button--active' : ''}`}
                   onClick={handleToggleRecording}
-                  disabled={micStatus === 'pending' || (!sttSupported && !isRecording)}
+                  disabled={transcribeRecordDisabled}
+                  aria-label={isRecording ? 'Stop recording' : 'Start recording'}
+                  title={transcribeRecordTitle}
                 >
                   <span className={`record-button__icon record-button__icon--${transcribeMicState}`}>
                     <MicIcon state={transcribeMicState} />
                   </span>
-                  <span>{isRecording ? 'Stop recording' : 'Start recording'}</span>
                   <span className="sr-only" aria-live="polite">
                     {transcribeStatusText}
                   </span>
+                </button>
+                <button
+                  type="button"
+                  className="record-restart-button"
+                  onClick={handleRestartTranscribe}
+                  disabled={transcribeRestartDisabled}
+                  aria-label={isRecording ? 'Restart recording' : 'Start new recording'}
+                  title={transcribeRestartTitle}
+                >
+                  <FiRotateCcw size={18} aria-hidden="true" focusable="false" />
                 </button>
                 <span
                   className={`status-chip ${permissionMeta.active ? 'status-chip--active' : ''}`}
@@ -1880,21 +2148,26 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
                 type="button"
                 className={`record-button ${isComposeRecording ? 'record-button--active' : ''}`}
                 onClick={isComposeRecording ? () => handleStopComposeRecording(false) : handleStartComposeRecording}
-                disabled={
-                  isComposeBusy ||
-                  promptAvailabilityState === 'checking' ||
-                  promptAvailabilityState === 'unsupported' ||
-                  promptAvailabilityState === 'unavailable' ||
-                  promptAvailabilityState === 'error'
-                }
+                disabled={composeRecordDisabled}
+                aria-label={isComposeRecording ? 'Stop capture' : 'Start capture'}
+                title={composeRecordTitle}
               >
                 <span className={`record-button__icon record-button__icon--${composeMicState}`}>
                   <MicIcon state={composeMicState} />
                 </span>
-                <span>{isComposeRecording ? 'Stop capture' : 'Start capture'}</span>
                 <span className="sr-only" aria-live="polite">
                   {composeStatusText}
                 </span>
+              </button>
+              <button
+                type="button"
+                className="record-restart-button"
+                onClick={handleRestartComposeRecording}
+                disabled={composeRestartDisabled}
+                aria-label={isComposeRecording ? 'Restart capture' : 'Start new capture'}
+                title={composeRestartTitle}
+              >
+                <FiRotateCcw size={18} aria-hidden="true" focusable="false" />
               </button>
               {composeState === 'streaming' && (
                 <button type="button" className="button button--outline" onClick={handleCancelCompose}>

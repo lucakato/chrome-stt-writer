@@ -4,7 +4,7 @@ import type { IconType } from 'react-icons';
 import { MdKeyboardVoice } from 'react-icons/md';
 import { RiVoiceprintFill } from 'react-icons/ri';
 import { IoSettingsSharp } from 'react-icons/io5';
-import { FiCopy, FiCornerDownRight } from 'react-icons/fi';
+import { FiCopy, FiCornerDownRight, FiRotateCcw } from 'react-icons/fi';
 import type { EkkoMessage, EkkoResponse } from '@shared/messages';
 import {
   getEkkoSettings,
@@ -45,6 +45,7 @@ const ICON_MIC_RECORDING = iconMarkup(RiVoiceprintFill);
 const ICON_SETTINGS = iconMarkup(IoSettingsSharp);
 const ICON_COPY = iconMarkup(FiCopy);
 const ICON_INSERT = iconMarkup(FiCornerDownRight);
+const ICON_RESTART = iconMarkup(FiRotateCcw);
 const ICON_MIC_PROCESSING = '<span aria-hidden="true">⏳</span>';
 const WIDGET_COMPOSE_MAX_DURATION_MS = 90_000;
 const TEMP_DIRECT_INSERT_DELAY_MS = 150;
@@ -199,11 +200,14 @@ if (window.top !== window.self) {
   let rewritePreset: WidgetRewritePreset = 'concise-formal';
   let transcribeOutputKind: 'raw' | 'refine' | 'polish' | 'other' = 'raw';
   let insertBusy = false;
+  let composeAbortRequested = false;
+  let composeRestartPending = false;
 
   let root: HTMLDivElement | null = null;
   let triggerButton: HTMLButtonElement | null = null;
   let popup: HTMLDivElement | null = null;
   let micButton: HTMLButtonElement | null = null;
+  let restartButton: HTMLButtonElement | null = null;
   let settingsButton: HTMLButtonElement | null = null;
   let regenerateButton: HTMLButtonElement | null = null;
   let promptTextarea: HTMLTextAreaElement | null = null;
@@ -875,6 +879,13 @@ if (window.top !== window.self) {
     micButton.innerHTML = ICON_MIC_IDLE;
     micButton.addEventListener('click', handleMicClick);
 
+    restartButton = document.createElement('button');
+    restartButton.className = 'ekko-icon-button';
+    restartButton.type = 'button';
+    restartButton.title = 'Restart recording';
+    restartButton.innerHTML = ICON_RESTART;
+    restartButton.addEventListener('click', handleRestartClick);
+
     settingsButton = document.createElement('button');
     settingsButton.className = 'ekko-icon-button';
     settingsButton.type = 'button';
@@ -923,6 +934,7 @@ if (window.top !== window.self) {
     });
 
     controlsRow.appendChild(micButton);
+    controlsRow.appendChild(restartButton);
     controlsRow.appendChild(settingsButton);
 
     transcribeActionsRow = document.createElement('div');
@@ -1025,15 +1037,17 @@ if (window.top !== window.self) {
     }
     updateTranscribeOutputVisibility();
     updateComposeOutputVisibility();
+    updateMicUi();
   }
 
   function updateMicUi() {
     if (!micButton) return;
+    const composeMode = settings.mode === 'compose';
     if (recorderState === 'recording') {
       micButton.classList.add('ekko-icon-button--active');
       micButton.classList.add('ekko-icon-button--recording');
       micButton.innerHTML = ICON_MIC_RECORDING;
-      micButton.title = 'Stop recording';
+      micButton.title = composeMode ? 'Stop capture' : 'Stop recording';
     } else if (recorderState === 'processing') {
       micButton.classList.add('ekko-icon-button--active');
       micButton.classList.remove('ekko-icon-button--recording');
@@ -1043,7 +1057,16 @@ if (window.top !== window.self) {
       micButton.classList.remove('ekko-icon-button--active');
       micButton.classList.remove('ekko-icon-button--recording');
       micButton.innerHTML = ICON_MIC_IDLE;
-      micButton.title = 'Start recording';
+      micButton.title = composeMode ? 'Start capture' : 'Start recording';
+    }
+    if (restartButton) {
+      const restartDisabled = recorderState === 'processing';
+      restartButton.disabled = restartDisabled;
+      let restartTitle = composeMode ? 'Restart capture' : 'Restart recording';
+      if (restartDisabled) {
+        restartTitle = composeMode ? 'Capture is processing…' : 'Recording is processing…';
+      }
+      restartButton.title = restartTitle;
     }
     updateActionButtonStates();
   }
@@ -1551,12 +1574,42 @@ if (window.top !== window.self) {
         window.clearInterval(composeTimer);
         composeTimer = null;
       }
-    composeStart = null;
-    setTimer(0);
-    recorderState = 'processing';
-    updateMicUi();
-    setComposeOutput('Generating…');
-    setStatus('Generating…');
+      composeStart = null;
+      setTimer(0);
+
+      const aborted = composeAbortRequested;
+      const shouldRestart = composeRestartPending;
+      composeAbortRequested = false;
+      composeRestartPending = false;
+
+      const cleanupStream = () => {
+        mediaStream?.getTracks().forEach((track) => track.stop());
+        mediaStream = null;
+        mediaRecorder = null;
+      };
+
+      if (aborted) {
+        cleanupStream();
+        mediaChunks = [];
+        lastComposeAudio = null;
+        hasComposeRecording = false;
+        recorderState = 'idle';
+        updateMicUi();
+        setStatus('');
+        setComposeOutput(null);
+        if (shouldRestart) {
+          startCompose().catch((error) => {
+            console.warn('Unable to restart compose recording', error);
+            setStatus(error instanceof Error ? error.message : 'Unable to start recording.', 'danger');
+          });
+        }
+        return;
+      }
+
+      recorderState = 'processing';
+      updateMicUi();
+      setComposeOutput('Generating…');
+      setStatus('Generating…');
 
       try {
         const blobMime = mediaRecorder?.mimeType || mimeType || 'audio/webm';
@@ -1573,9 +1626,7 @@ if (window.top !== window.self) {
         console.warn('Compose failed', error);
         setStatus(error instanceof Error ? error.message : 'Compose failed.', 'danger');
       } finally {
-        mediaStream?.getTracks().forEach((track) => track.stop());
-        mediaStream = null;
-        mediaRecorder = null;
+        cleanupStream();
         recorderState = 'idle';
         updateMicUi();
       }
@@ -1614,9 +1665,20 @@ if (window.top !== window.self) {
     }, 200);
   }
 
-  function stopCompose() {
+  function stopCompose({ abort = false }: { abort?: boolean } = {}) {
+    if (abort) {
+      composeAbortRequested = true;
+    }
     if (mediaRecorder && mediaRecorder.state === 'recording') {
-      mediaRecorder.stop();
+      try {
+        mediaRecorder.stop();
+      } catch (error) {
+        console.warn('Unable to stop compose recorder', error);
+        if (abort) {
+          composeAbortRequested = false;
+          composeRestartPending = false;
+        }
+      }
     }
     if (composeLimitTimer) {
       window.clearTimeout(composeLimitTimer);
@@ -1630,6 +1692,89 @@ if (window.top !== window.self) {
     }
     if (recognition) {
       stopTranscribe();
+    }
+  }
+
+  function abortTranscribe() {
+    if (recognitionTimer) {
+      window.clearTimeout(recognitionTimer);
+      recognitionTimer = null;
+    }
+    if (recognition) {
+      recognition.onresult = null;
+      recognition.onerror = null;
+      recognition.onend = null;
+      try {
+        recognition.stop();
+      } catch (error) {
+        console.warn('Unable to stop speech recognition', error);
+      }
+      recognition = null;
+    }
+    transcribeFinal = '';
+    transcribeInterim = '';
+    lastLoggedWidgetTranscript = '';
+    setTranscribeOutput(null, 'raw');
+    recorderState = 'idle';
+    updateMicUi();
+    setStatus('');
+  }
+
+  function restartTranscribe() {
+    abortTranscribe();
+    startTranscribe().catch((error) => {
+      console.warn('Unable to restart transcription', error);
+      recorderState = 'idle';
+      updateMicUi();
+      setStatus(error instanceof Error ? error.message : 'Unable to start recording.', 'danger');
+    });
+  }
+
+  function restartCompose() {
+    if (recorderState === 'processing') {
+      return;
+    }
+    setComposeOutput(null);
+    setStatus('');
+    mediaChunks = [];
+    hasComposeRecording = false;
+    lastComposeAudio = null;
+    if (composeTimer) {
+      window.clearInterval(composeTimer);
+      composeTimer = null;
+    }
+    if (composeLimitTimer) {
+      window.clearTimeout(composeLimitTimer);
+      composeLimitTimer = null;
+    }
+    setTimer(0);
+    mediaStream?.getTracks().forEach((track) => track.stop());
+    mediaStream = null;
+    if (mediaRecorder && mediaRecorder.state === 'recording') {
+      composeRestartPending = true;
+      stopCompose({ abort: true });
+      return;
+    }
+    composeRestartPending = false;
+    composeAbortRequested = false;
+    recorderState = 'idle';
+    updateMicUi();
+    startCompose().catch((error) => {
+      console.warn('Unable to start compose recording', error);
+      recorderState = 'idle';
+      updateMicUi();
+      setStatus(error instanceof Error ? error.message : 'Unable to start recording.', 'danger');
+    });
+  }
+
+  function handleRestartClick() {
+    if (recorderState === 'processing') {
+      return;
+    }
+    if (settings.mode === 'compose') {
+      restartCompose();
+    } else {
+      restartTranscribe();
     }
   }
 
