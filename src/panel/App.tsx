@@ -261,12 +261,30 @@ const [summarizerState, setSummarizerState] = useState<'idle' | 'checking' | Rew
   const restartTranscribePendingRef = useRef(false);
 const composeSessionRef = useRef<LanguageModelSession | null>(null);
 const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(null);
+const promptAvailabilityStateRef = useRef<'idle' | 'checking' | PromptAvailabilityStatus>(promptAvailabilityState);
+const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMessage);
 
   const directInsertEnabled = directInsertEnabledState;
 
   useEffect(() => {
     composeStateRef.current = composeState;
   }, [composeState]);
+
+  useEffect(() => {
+    promptAvailabilityStateRef.current = promptAvailabilityState;
+  }, [promptAvailabilityState]);
+
+  useEffect(() => {
+    promptAvailabilityMessageRef.current = promptAvailabilityMessage;
+  }, [promptAvailabilityMessage]);
+
+  const restorePromptAvailability = useCallback(
+    (state: 'idle' | 'checking' | PromptAvailabilityStatus, message: string | null) => {
+      setPromptAvailabilityState(state);
+      setPromptAvailabilityMessage(message);
+    },
+    []
+  );
 
   const setDirectInsertEnabled = useCallback((enabled: boolean) => {
     setDirectInsertEnabledState(enabled);
@@ -595,12 +613,12 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
     : isRecording
     ? 'Restart recording'
     : 'Start new recording';
-  const composeRecordDisabled =
-    isComposeBusy ||
+  const promptBlocksRecording =
     promptAvailabilityState === 'checking' ||
     promptAvailabilityState === 'unsupported' ||
     promptAvailabilityState === 'unavailable' ||
     promptAvailabilityState === 'error';
+  const composeRecordDisabled = isComposeBusy || promptBlocksRecording;
   const composeRecordTitle = composeRecordDisabled
     ? promptAvailabilityState === 'checking'
       ? 'Checking on-device model availability…'
@@ -628,8 +646,8 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
         <p key="mic-error" className="helper-text danger">
           {micError}
         </p>
-      );
-    }
+  );
+}
     if (!micError && micStatus === 'denied') {
       messages.push(
         <p key="mic-denied" className="helper-text danger">
@@ -1194,6 +1212,9 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
       const abortController = new AbortController();
       composeAbortRef.current = abortController;
 
+      const previousPromptState = promptAvailabilityStateRef.current;
+      const previousPromptMessage = promptAvailabilityMessageRef.current;
+
       try {
         let session: LanguageModelSession | null = composeSessionRef.current;
         if (!session) {
@@ -1332,6 +1353,7 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
           composeSessionRef.current?.destroy?.();
           composeSessionRef.current?.close?.();
           composeSessionRef.current = null;
+          restorePromptAvailability(previousPromptState, previousPromptMessage);
         }
         setComposeDraft(null);
         setComposeRawPreview('');
@@ -1340,7 +1362,13 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
         composeAbortRef.current = null;
       }
     },
-    [activeComposePreset, composePrompt, ensurePromptSession, outputLanguage]
+    [
+      activeComposePreset,
+      composePrompt,
+      ensurePromptSession,
+      outputLanguage,
+      restorePromptAvailability
+    ]
   );
 
   const handleStopComposeRecording = useCallback(
@@ -1424,6 +1452,8 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
           : undefined;
       const recorder = new MediaRecorder(stream, recorderOptions as MediaRecorderOptions | undefined);
       composeRecorderRef.current = recorder;
+      const previousPromptState = promptAvailabilityStateRef.current;
+      const previousPromptMessage = promptAvailabilityMessageRef.current;
 
       recorder.ondataavailable = (event) => {
         if (event.data && event.data.size > 0) {
@@ -1465,12 +1495,14 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
           if (!restartPending) {
             composeRestartPendingRef.current = false;
           }
+          restorePromptAvailability(previousPromptState, previousPromptMessage);
           return;
         }
 
         if (!chunks.length) {
           setComposeError('No audio captured. Try recording again.');
           setComposeState('idle');
+          restorePromptAvailability(previousPromptState, previousPromptMessage);
           return;
         }
 
@@ -1485,6 +1517,7 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
               : 'Unable to process recorded audio.';
           setComposeError(message);
           setComposeState('idle');
+          restorePromptAvailability(previousPromptState, previousPromptMessage);
         }
 
         composeRestartPendingRef.current = false;
@@ -1516,7 +1549,16 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
     setComposeError(message);
     setComposeState('idle');
   }
-  }, [composeStateRef, ensurePromptSession, handleStopComposeRecording, isMicGranted, isPromptUnavailable, requestPermission, runCompose]);
+  }, [
+    composeStateRef,
+    ensurePromptSession,
+    handleStopComposeRecording,
+    isMicGranted,
+    isPromptUnavailable,
+    requestPermission,
+    restorePromptAvailability,
+    runCompose
+  ]);
 
   const handleRestartComposeRecording = useCallback(async () => {
     if (!isMicGranted) {
