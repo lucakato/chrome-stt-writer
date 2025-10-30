@@ -191,26 +191,33 @@ body {
 }
 
 .record-button {
-  padding: 10px 14px;
-  border-radius: 12px;
-  border: none;
-  font-weight: 600;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid rgba(89, 104, 242, 0.25);
   display: inline-flex;
   align-items: center;
-  gap: 12px;
-  background: var(--ekko-primary);
-  color: white;
+  justify-content: center;
+  background: #ffffff;
+  color: var(--ekko-primary);
   cursor: pointer;
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  padding: 0;
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease,
+    background 0.2s ease,
+    color 0.2s ease,
+    border-color 0.2s ease;
 }
 
-.record-button:hover {
+.record-button:hover:not(:disabled) {
   transform: translateY(-1px);
-  box-shadow: 0 10px 18px rgba(89, 104, 242, 0.25);
+  box-shadow: 0 8px 16px rgba(89, 104, 242, 0.2);
+  border-color: rgba(89, 104, 242, 0.4);
 }
 
 .record-button:disabled {
-  opacity: 0.6;
+  opacity: 0.5;
   cursor: not-allowed;
   box-shadow: none;
 }
@@ -218,7 +225,7 @@ body {
 .record-restart-button {
   width: 40px;
   height: 40px;
-  border-radius: 12px;
+  border-radius: 50%;
   border: 1px solid rgba(89, 104, 242, 0.25);
   background: #ffffff;
   color: var(--ekko-primary);
@@ -243,34 +250,34 @@ body {
 }
 
 .record-button__icon {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: rgba(255, 255, 255, 0.12);
-  color: inherit;
-  transition: background 0.2s ease, transform 0.2s ease, color 0.2s ease;
+  transition: transform 0.2s ease, color 0.2s ease;
 }
 
 .record-button__icon--off {
-  background: rgba(255, 255, 255, 0.08);
-  color: rgba(255, 255, 255, 0.7);
+  color: rgba(89, 104, 242, 0.55);
 }
 
 .record-button__icon--idle {
-  background: rgba(255, 255, 255, 0.18);
+  color: var(--ekko-primary);
 }
 
 .record-button__icon--recording {
-  background: #ffffff;
-  color: var(--ekko-primary);
+  color: #ffffff;
   animation: record-blink 1s ease-in-out infinite;
 }
 
 .record-button--active {
-  box-shadow: 0 8px 16px rgba(89, 104, 242, 0.35);
+  background: var(--ekko-primary);
+  color: #ffffff;
+  border-color: transparent;
+  box-shadow: 0 10px 18px rgba(89, 104, 242, 0.35);
+}
+
+.record-button--active .record-button__icon {
+  color: inherit;
 }
 
 @keyframes record-blink {
