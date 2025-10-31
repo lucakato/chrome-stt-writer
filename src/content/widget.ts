@@ -4,16 +4,16 @@ import type { IconType } from 'react-icons';
 import { MdKeyboardVoice } from 'react-icons/md';
 import { RiVoiceprintFill } from 'react-icons/ri';
 import { IoSettingsSharp } from 'react-icons/io5';
-import { FiCopy, FiCornerDownRight, FiRotateCcw } from 'react-icons/fi';
-import type { EkkoMessage, EkkoResponse } from '@shared/messages';
+import { FiCopy, FiCornerDownRight, FiRotateCcw, FiPenTool } from 'react-icons/fi';
+import type { EchoMessage, EchoResponse } from '@shared/messages';
 import {
-  getEkkoSettings,
-  observeEkkoSettings,
-  setEkkoSettings,
+  getEchoSettings,
+  observeEchoSettings,
+  setEchoSettings,
   DEFAULT_SETTINGS,
-  type EkkoSettings,
-  type EkkoMode,
-  type EkkoSettingsChange
+  type EchoSettings,
+  type EchoMode,
+  type EchoSettingsChange
 } from '@shared/settings';
 import { composeFromAudio, composeFromText, TRANSCRIBE_STRUCTURED_SYSTEM_PROMPT } from '@shared/ai/prompt';
 import { rewriteText } from '@shared/ai/rewriter';
@@ -28,7 +28,7 @@ import {
 } from '@shared/compose';
 
 const WIDGET_DEFAULT_COMPOSE_PROMPT =
-  'You are Ekko, an on-device assistant. Listen carefully and give a direct, helpful answer that the user can use immediately. Reply in the user’s language, stay concise, and do not add meta commentary or extra instructions.';
+  'You are Echo, an on-device assistant. The user will dictate instructions for the message they need. Transform those instructions into the finished text, written from the user’s perspective. If a recipient is mentioned, address that person directly. Include any requested structure (for example bullet lists or counts) inside the message. Do not repeat or reference the instructions, do not explain what you are doing, and never add guidance or meta commentary—return only the final deliverable the user can send immediately.';
 
 function iconMarkup(icon: IconType): string {
   return renderToStaticMarkup(
@@ -46,6 +46,7 @@ const ICON_SETTINGS = iconMarkup(IoSettingsSharp);
 const ICON_COPY = iconMarkup(FiCopy);
 const ICON_INSERT = iconMarkup(FiCornerDownRight);
 const ICON_RESTART = iconMarkup(FiRotateCcw);
+const ICON_COMPOSE = iconMarkup(FiPenTool);
 const ICON_MIC_PROCESSING = '<span aria-hidden="true">⏳</span>';
 const WIDGET_COMPOSE_MAX_DURATION_MS = 90_000;
 const TEMP_DIRECT_INSERT_DELAY_MS = 150;
@@ -161,7 +162,7 @@ if (window.top !== window.self) {
 } else if (!window.__ekkoWidgetInjected__) {
   window.__ekkoWidgetInjected__ = true;
 
-  let settings: EkkoSettings = DEFAULT_SETTINGS;
+  let settings: EchoSettings = DEFAULT_SETTINGS;
   let recorderState: RecordingState = 'idle';
   let recognition: SpeechRecognition | null = null;
   let recognitionTimer: number | null = null;
@@ -189,6 +190,11 @@ if (window.top !== window.self) {
   let composeOutputText: HTMLParagraphElement | null = null;
   let composeOutputValue: ComposeDraftResult | null = null;
   let composeOutputMessage: string | null = null;
+  let composeTranscriptCard: HTMLDivElement | null = null;
+  let composeTranscriptScroll: HTMLDivElement | null = null;
+  let composeTranscriptPlaceholder: HTMLParagraphElement | null = null;
+  let composeTranscriptText: HTMLParagraphElement | null = null;
+  let composeTranscriptValue = '';
   let transcribeActionsRow: HTMLDivElement | null = null;
   let refineButton: HTMLButtonElement | null = null;
   let polishButton: HTMLButtonElement | null = null;
@@ -202,6 +208,9 @@ if (window.top !== window.self) {
   let insertBusy = false;
   let composeAbortRequested = false;
   let composeRestartPending = false;
+  let composeRecognition: SpeechRecognition | null = null;
+  let composeTranscriptInterim = '';
+  let composeTranscriptFinal = '';
 
   let root: HTMLDivElement | null = null;
   let triggerButton: HTMLButtonElement | null = null;
@@ -529,7 +538,7 @@ if (window.top !== window.self) {
     }
   }
 
-  function handleDirectInsertToggleMessage(message: EkkoMessage) {
+  function handleDirectInsertToggleMessage(message: EchoMessage) {
     if (message.type === 'ekko/direct-insert/toggle') {
       const enabled = !!(message.payload as { enabled?: boolean }).enabled;
       if (tempDirectInsertDepth === 0) {
@@ -549,7 +558,7 @@ if (window.top !== window.self) {
 
   async function queryDirectInsertState() {
     try {
-      const response = (await chrome.runtime.sendMessage({ type: 'ekko/direct-insert/query' } satisfies EkkoMessage)) as EkkoResponse | undefined;
+      const response = (await chrome.runtime.sendMessage({ type: 'ekko/direct-insert/query' } satisfies EchoMessage)) as EchoResponse | undefined;
       if (response && response.ok && response.data && typeof response.data === 'object') {
         const enabled = !!(response.data as { enabled?: boolean }).enabled;
         setDirectInsertState(enabled);
@@ -561,7 +570,7 @@ if (window.top !== window.self) {
 
   async function composeWidgetAudio(audioBuffer: ArrayBuffer): Promise<ComposeDraftResult> {
     const instruction = settings.composePrompt.trim();
-    console.info('[Ekko] widget instruction:', instruction);
+    console.info('[Echo] widget instruction:', instruction);
   const outputLanguage = resolveOutputLanguage();
     let lastDraft: ComposeDraftResult | null = null;
     const systemPrompt = instruction
@@ -605,7 +614,7 @@ if (window.top !== window.self) {
             paragraphs: draft.paragraphs
           }
         }
-      } satisfies EkkoMessage)
+      } satisfies EchoMessage)
       .catch((error) => {
         console.warn('Unable to insert compose output', error);
         throw error;
@@ -660,7 +669,7 @@ if (window.top !== window.self) {
       .sendMessage({
         type: 'ekko/direct-insert/apply',
         payload
-      } satisfies EkkoMessage)
+      } satisfies EchoMessage)
       .catch((error) => {
         console.warn('Unable to insert transcript output', error);
         throw error;
@@ -759,7 +768,7 @@ if (window.top !== window.self) {
     triggerButton.id = 'ekko-floating-widget-trigger';
     triggerButton.type = 'button';
     triggerButton.innerHTML = '<span aria-hidden="true">🗨️</span>';
-    triggerButton.title = 'Ekko';
+    triggerButton.title = 'Echo';
     triggerButton.addEventListener('click', () => {
       popupOpen = !popupOpen;
       popup?.classList.toggle('ekko-popup--open', popupOpen);
@@ -777,7 +786,7 @@ if (window.top !== window.self) {
 
     const title = document.createElement('span');
     title.className = 'ekko-popup__title';
-    title.textContent = 'Ekko';
+    title.textContent = 'Echo';
 
     const close = document.createElement('button');
     close.className = 'ekko-popup__close';
@@ -835,13 +844,27 @@ if (window.top !== window.self) {
     promptTextarea.addEventListener('input', (event) => {
       const value = (event.target as HTMLTextAreaElement).value;
       settings = { ...settings, composePrompt: value };
-      setEkkoSettings({ composePrompt: value }).catch((error) =>
+      setEchoSettings({ composePrompt: value }).catch((error) =>
         console.warn('Unable to update prompt', error)
       );
     });
 
     composeOutputCard = document.createElement('div');
     composeOutputCard.className = 'ekko-output';
+
+    composeTranscriptCard = document.createElement('div');
+    composeTranscriptCard.className = 'ekko-output';
+    composeTranscriptScroll = document.createElement('div');
+    composeTranscriptScroll.className = 'ekko-output__scroll';
+    composeTranscriptScroll.style.display = 'none';
+    composeTranscriptText = document.createElement('p');
+    composeTranscriptText.className = 'ekko-output__text';
+    composeTranscriptScroll.appendChild(composeTranscriptText);
+    composeTranscriptPlaceholder = document.createElement('p');
+    composeTranscriptPlaceholder.className = 'ekko-output__placeholder';
+    composeTranscriptPlaceholder.textContent = 'Your transcript will appear here.';
+    composeTranscriptCard.appendChild(composeTranscriptScroll);
+    composeTranscriptCard.appendChild(composeTranscriptPlaceholder);
 
     composeOutputScroll = document.createElement('div');
     composeOutputScroll.className = 'ekko-output__scroll';
@@ -902,7 +925,7 @@ if (window.top !== window.self) {
                 .catch(() => undefined)
             : undefined;
 
-        const response = await chrome.runtime.sendMessage<EkkoMessage, EkkoResponse>({
+        const response = await chrome.runtime.sendMessage<EchoMessage, EchoResponse>({
           type: 'ekko/sidepanel/open',
           payload: { action: 'toggle', windowId: payloadWindowId ?? undefined }
         });
@@ -928,7 +951,7 @@ if (window.top !== window.self) {
           setStatus('Settings opened in side panel.');
         }
       } catch (error) {
-        console.warn('Unable to open Ekko side panel from widget', error);
+        console.warn('Unable to open Echo side panel from widget', error);
         setStatus('Unable to open settings.', 'danger');
       }
     });
@@ -993,7 +1016,7 @@ if (window.top !== window.self) {
     regenerateButton = document.createElement('button');
     regenerateButton.type = 'button';
     regenerateButton.className = 'ekko-popup__regen';
-    regenerateButton.textContent = 'Re-generate';
+    regenerateButton.innerHTML = `${ICON_COMPOSE}<span>Compose</span>`;
     regenerateButton.addEventListener('click', handleRegenerate);
 
     footer.appendChild(statusLabel);
@@ -1003,6 +1026,7 @@ if (window.top !== window.self) {
     body.appendChild(controlsRow);
     body.appendChild(transcribeOutputCard);
     body.appendChild(transcribeActionsRow);
+    body.appendChild(composeTranscriptCard);
     body.appendChild(promptTextarea);
     body.appendChild(composeOutputCard);
     body.appendChild(footer);
@@ -1012,6 +1036,7 @@ if (window.top !== window.self) {
     root?.appendChild(popup);
     updateTranscribeOutputVisibility();
     updateComposeOutputVisibility();
+    updateComposeTranscriptVisibility();
     updateTranscribeActionsVisibility();
     updateActionButtonStates();
   }
@@ -1037,6 +1062,7 @@ if (window.top !== window.self) {
     }
     updateTranscribeOutputVisibility();
     updateComposeOutputVisibility();
+    updateComposeTranscriptVisibility();
     updateMicUi();
   }
 
@@ -1132,7 +1158,7 @@ if (window.top !== window.self) {
       .sendMessage({
         type: 'ekko/direct-insert/toggle',
         payload: { enabled }
-      } satisfies EkkoMessage)
+      } satisfies EchoMessage)
       .catch((error) => {
         console.warn('Unable to toggle direct insert bridge', error);
         rollbackDepth();
@@ -1267,6 +1293,29 @@ if (window.top !== window.self) {
     updateComposeOutputVisibility();
   }
 
+  function setComposeTranscript(text: string | null) {
+    composeTranscriptValue = text && text.trim() ? text.trim() : '';
+    if (composeTranscriptText) {
+      composeTranscriptText.textContent = composeTranscriptValue;
+    }
+    if (composeTranscriptScroll) {
+      composeTranscriptScroll.style.display = composeTranscriptValue ? 'block' : 'none';
+    }
+    if (composeTranscriptPlaceholder) {
+      composeTranscriptPlaceholder.style.display = composeTranscriptValue ? 'none' : 'block';
+    }
+  }
+
+  function updateComposeTranscriptVisibility() {
+    if (!composeTranscriptCard) return;
+    const visible = settings.mode === 'compose';
+    composeTranscriptCard.style.display = visible ? 'flex' : 'none';
+    if (!visible) return;
+    if (!composeTranscriptValue && composeTranscriptPlaceholder) {
+      composeTranscriptPlaceholder.style.display = 'block';
+    }
+  }
+
   function updateTranscribeOutputVisibility() {
     if (!transcribeOutputCard) return;
     const visible = settings.mode === 'transcribe';
@@ -1283,6 +1332,15 @@ if (window.top !== window.self) {
       transcribeOutputText.textContent = transcribeOutputValue;
     }
     updateTranscribeActionsVisibility();
+  }
+
+  function updateComposeTranscriptDisplay() {
+    const finalText = composeTranscriptFinal.trim();
+    const interimText = composeTranscriptInterim.trim();
+    const combined = interimText
+      ? `${finalText}${finalText ? ' ' : ''}${interimText}`.trim()
+      : finalText;
+    setComposeTranscript(combined || null);
   }
 
   function setTranscribeOutput(
@@ -1311,6 +1369,90 @@ if (window.top !== window.self) {
     if (visible) {
       updateActionButtonStates();
     }
+  }
+
+  function startComposeRecognition() {
+    const SpeechRecognitionCtor =
+      (window as typeof window & {
+        webkitSpeechRecognition?: typeof SpeechRecognition;
+      }).SpeechRecognition ||
+      (window as typeof window & {
+        webkitSpeechRecognition?: typeof SpeechRecognition;
+      }).webkitSpeechRecognition;
+
+    if (!SpeechRecognitionCtor) {
+      return;
+    }
+
+    composeRecognition?.stop();
+    composeTranscriptFinal = '';
+    composeTranscriptInterim = '';
+    setComposeTranscript(null);
+
+    composeRecognition = new SpeechRecognitionCtor();
+    composeRecognition.lang = navigator.language ?? 'en-US';
+    composeRecognition.continuous = true;
+    composeRecognition.interimResults = true;
+    composeRecognition.maxAlternatives = 1;
+
+    composeRecognition.onresult = (event) => {
+      composeTranscriptInterim = '';
+      for (let i = event.resultIndex; i < event.results.length; i += 1) {
+        const result = event.results[i];
+        const transcript = result[0]?.transcript ?? '';
+        if (!transcript) continue;
+        if (result.isFinal) {
+          composeTranscriptFinal = `${composeTranscriptFinal}${composeTranscriptFinal ? ' ' : ''}${transcript.trim()}`;
+        } else {
+          composeTranscriptInterim += transcript;
+        }
+      }
+      updateComposeTranscriptDisplay();
+    };
+
+    composeRecognition.onerror = (event) => {
+      if (event.error !== 'aborted') {
+        console.warn('Compose speech recognition error', event);
+      }
+    };
+
+    composeRecognition.onend = () => {
+      if (composeTranscriptInterim.trim()) {
+        composeTranscriptFinal = composeTranscriptFinal
+          ? `${composeTranscriptFinal} ${composeTranscriptInterim.trim()}`
+          : composeTranscriptInterim.trim();
+        composeTranscriptInterim = '';
+      }
+      updateComposeTranscriptDisplay();
+    };
+
+    try {
+      composeRecognition.start();
+    } catch (error) {
+      console.warn('Unable to start compose speech recognition', error);
+      composeRecognition = null;
+    }
+  }
+
+  function stopComposeRecognition() {
+    if (composeRecognition) {
+      try {
+        composeRecognition.stop();
+      } catch (error) {
+        console.warn('Unable to stop compose speech recognition', error);
+      }
+      if (composeTranscriptInterim.trim()) {
+        composeTranscriptFinal = composeTranscriptFinal
+          ? `${composeTranscriptFinal} ${composeTranscriptInterim.trim()}`
+          : composeTranscriptInterim.trim();
+        composeTranscriptInterim = '';
+      }
+      updateComposeTranscriptDisplay();
+      composeRecognition.onresult = null;
+      composeRecognition.onerror = null;
+      composeRecognition.onend = null;
+    }
+    composeRecognition = null;
   }
 
   function updateActionButtonStates() {
@@ -1386,11 +1528,11 @@ if (window.top !== window.self) {
     }
   }
 
-  function switchMode(mode: EkkoMode) {
+  function switchMode(mode: EchoMode) {
     if (settings.mode === mode) return;
     settings = { ...settings, mode };
     updateModeUi();
-    setEkkoSettings({ mode }).catch((error) => console.warn('Unable to switch mode', error));
+    setEchoSettings({ mode }).catch((error) => console.warn('Unable to switch mode', error));
     if (recorderState === 'recording') {
       stopRecording();
     }
@@ -1445,7 +1587,7 @@ if (window.top !== window.self) {
       if (finalText && finalText !== lastLoggedWidgetTranscript) {
         const confidenceOutput =
           typeof lastConfidence === 'number' ? Number(lastConfidence.toFixed(3)) : undefined;
-        console.info('[Ekko] Widget speech recognition final result', {
+        console.info('[Echo] Widget speech recognition final result', {
           transcript: finalText,
           confidence: confidenceOutput
         });
@@ -1556,12 +1698,15 @@ if (window.top !== window.self) {
     mediaRecorder = mimeType ? new MediaRecorder(mediaStream, { mimeType }) : new MediaRecorder(mediaStream);
     mimeType = mediaRecorder.mimeType || mimeType;
     try {
-      console.info('[Ekko] Widget compose recorder MIME', mimeType);
+      console.info('[Echo] Widget compose recorder MIME', mimeType);
     } catch {
       /* ignore */
     }
     hasComposeRecording = false;
     setComposeOutput(null);
+    composeTranscriptFinal = '';
+    composeTranscriptInterim = '';
+    setComposeTranscript(null);
 
     mediaRecorder.ondataavailable = (event) => {
       if (event.data && event.data.size > 0) {
@@ -1587,6 +1732,8 @@ if (window.top !== window.self) {
         mediaStream = null;
         mediaRecorder = null;
       };
+
+      stopComposeRecognition();
 
       if (aborted) {
         cleanupStream();
@@ -1639,6 +1786,7 @@ if (window.top !== window.self) {
     setComposeOutput('Recording… 0:00');
     setStatus('');
     setTimer(0);
+    startComposeRecognition();
 
     if (composeLimitTimer) {
       window.clearTimeout(composeLimitTimer);
@@ -1684,6 +1832,7 @@ if (window.top !== window.self) {
       window.clearTimeout(composeLimitTimer);
       composeLimitTimer = null;
     }
+    stopComposeRecognition();
   }
 
   function stopRecording() {
@@ -1739,6 +1888,10 @@ if (window.top !== window.self) {
     mediaChunks = [];
     hasComposeRecording = false;
     lastComposeAudio = null;
+    composeTranscriptFinal = '';
+    composeTranscriptInterim = '';
+    setComposeTranscript(null);
+    stopComposeRecognition();
     if (composeTimer) {
       window.clearInterval(composeTimer);
       composeTimer = null;
@@ -1796,6 +1949,7 @@ if (window.top !== window.self) {
         console.warn('Unable to start compose recording', error);
         recorderState = 'idle';
         updateMicUi();
+        stopComposeRecognition();
         setStatus(error instanceof Error ? error.message : 'Unable to start recording.', 'danger');
       });
     } else {
@@ -1990,7 +2144,7 @@ if (window.top !== window.self) {
     }
   }
 
-  function applySettingsChange(value: EkkoSettings, changed?: EkkoSettingsChange) {
+  function applySettingsChange(value: EchoSettings, changed?: EchoSettingsChange) {
     if (changed) {
       settings = {
         floatingWidgetEnabled: changed.floatingWidgetEnabled ? value.floatingWidgetEnabled : settings.floatingWidgetEnabled,
@@ -2004,14 +2158,14 @@ if (window.top !== window.self) {
   }
 
   function bootstrap() {
-    console.info('[Ekko] Floating widget bootstrap');
+    console.info('[Echo] Floating widget bootstrap');
     ensureWidget();
     void queryDirectInsertState();
-    chrome.runtime.onMessage.addListener((message: EkkoMessage) => {
+    chrome.runtime.onMessage.addListener((message: EchoMessage) => {
       handleDirectInsertToggleMessage(message);
       return false;
     });
-    getEkkoSettings()
+    getEchoSettings()
       .then((value) => {
         applySettingsChange(value);
         if (promptTextarea && (!document.activeElement || document.activeElement !== promptTextarea)) {
@@ -2019,10 +2173,10 @@ if (window.top !== window.self) {
         }
       })
       .catch((error) => {
-        console.warn('Unable to load Ekko settings', error);
+        console.warn('Unable to load Echo settings', error);
       });
 
-    observeEkkoSettings((value, changed) => {
+    observeEchoSettings((value, changed) => {
       applySettingsChange(value, changed);
     });
   }

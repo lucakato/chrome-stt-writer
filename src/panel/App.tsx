@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useMicrophonePermission } from '@shared/hooks/useMicrophonePermission';
 import { useSpeechRecorder } from '@shared/hooks/useSpeechRecorder';
-import type { EkkoMessage, EkkoResponse } from '@shared/messages';
+import type { EchoMessage, EchoResponse } from '@shared/messages';
 import { readOnboardingState, updateOnboardingState } from '@shared/storage/onboarding';
 import {
   getRewriterAvailability,
@@ -27,16 +27,16 @@ import {
 } from '@shared/compose';
 import {
   DEFAULT_SETTINGS,
-  getEkkoSettings,
-  observeEkkoSettings,
-  setEkkoSettings,
-  type EkkoMode,
-  type EkkoSettings
+  getEchoSettings,
+  observeEchoSettings,
+  setEchoSettings,
+  type EchoMode,
+  type EchoSettings
 } from '@shared/settings';
 import { MdKeyboardVoice } from 'react-icons/md';
 import { LuAudioLines } from 'react-icons/lu';
 import { IoMicOffSharp } from 'react-icons/io5';
-import { FiRotateCcw } from 'react-icons/fi';
+import { FiRotateCcw, FiPenTool } from 'react-icons/fi';
 
 type Mode = 'transcribe' | 'compose';
 
@@ -108,7 +108,7 @@ const composePresets: Array<{ id: ComposePresetId; label: string; systemPrompt: 
     id: 'freeform',
     label: 'Freeform',
     systemPrompt:
-      'You are Ekko, an on-device writing assistant. Listen carefully and return a direct, helpful answer the user can use immediately. Reply in the user’s language, keep it concise, and avoid meta commentary or extra instructions.'
+      'You are Echo, an on-device writing assistant. The user will dictate instructions about the message they need. Transform those instructions into the finished text, written from the user’s perspective. If the user mentions a recipient, address that person directly. Include any requested structure (such as lists or bullet points) inside the message. Never mention the instructions, never explain what you are doing, and do not add guidance or meta commentary—return only the final deliverable the user can send immediately.'
   },
   {
     id: 'email-formal',
@@ -212,7 +212,7 @@ function formatDuration(ms: number) {
 
 export default function App() {
   const { status: micStatus, requestPermission, error: micError } = useMicrophonePermission();
-  const [settings, setSettings] = useState<EkkoSettings>(DEFAULT_SETTINGS);
+  const [settings, setSettings] = useState<EchoSettings>(DEFAULT_SETTINGS);
   const [settingsReady, setSettingsReady] = useState(false);
 
   const [transcript, setTranscript] = useState('');
@@ -237,11 +237,14 @@ const [summarizerState, setSummarizerState] = useState<'idle' | 'checking' | Rew
   const [promptAvailabilityState, setPromptAvailabilityState] = useState<'idle' | 'checking' | PromptAvailabilityStatus>('idle');
   const [promptAvailabilityMessage, setPromptAvailabilityMessage] = useState<string | null>(null);
   const [composePreset, setComposePreset] = useState<ComposePresetId>('freeform');
-  const [composeState, setComposeState] = useState<'idle' | 'recording' | 'processing' | 'streaming'>('idle');
-  const [composeError, setComposeError] = useState<string | null>(null);
-  const [composeDraft, setComposeDraft] = useState<ComposeDraftResult | null>(null);
-  const [composeRawPreview, setComposeRawPreview] = useState('');
-  const [composeElapsedMs, setComposeElapsedMs] = useState(0);
+const [composeState, setComposeState] = useState<'idle' | 'recording' | 'processing' | 'streaming'>('idle');
+const [composeError, setComposeError] = useState<string | null>(null);
+const [composeDraft, setComposeDraft] = useState<ComposeDraftResult | null>(null);
+const [composeRawPreview, setComposeRawPreview] = useState('');
+const [composeElapsedMs, setComposeElapsedMs] = useState(0);
+const [composeReplayReady, setComposeReplayReady] = useState(false);
+const [composeTranscript, setComposeTranscript] = useState('');
+const [composeTranscriptInterim, setComposeTranscriptInterim] = useState('');
   const activeSessionIdRef = useRef<string | null>(null);
   const lastDirectInsertValueRef = useRef<string>('');
   const lastStructuredTranscriptRef = useRef<string>('');
@@ -253,9 +256,13 @@ const [summarizerState, setSummarizerState] = useState<'idle' | 'checking' | Rew
   const composeStartTimeRef = useRef<number | null>(null);
   const composeAbortRef = useRef<AbortController | null>(null);
   const composeStreamRef = useRef<MediaStream | null>(null);
-  const composeCleanupPendingRef = useRef(false);
-  const composeEntryIdRef = useRef<string | null>(null);
-  const composeStateRef = useRef(composeState);
+const composeSpeechRecognitionRef = useRef<SpeechRecognition | null>(null);
+const composeTranscriptFinalRef = useRef('');
+const composeTranscriptInterimRef = useRef('');
+const composeCleanupPendingRef = useRef(false);
+const composeEntryIdRef = useRef<string | null>(null);
+const lastComposeAudioRef = useRef<ArrayBuffer | null>(null);
+const composeStateRef = useRef(composeState);
   const composeAbortNextRef = useRef(false);
   const composeRestartPendingRef = useRef(false);
   const restartTranscribePendingRef = useRef(false);
@@ -298,7 +305,7 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
     try {
       const response = (await chrome.runtime.sendMessage({
         type: 'ekko/direct-insert/query'
-      } satisfies EkkoMessage)) as EkkoResponse | undefined;
+      } satisfies EchoMessage)) as EchoResponse | undefined;
       if (response && response.ok && response.data && typeof response.data === 'object') {
         const enabled = !!(response.data as { enabled?: boolean }).enabled;
         setDirectInsertEnabled(enabled);
@@ -314,7 +321,7 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
         ?.sendMessage({
           type: 'ekko/sidepanel/state',
           payload: { open, tabId, windowId }
-        } satisfies EkkoMessage)
+        } satisfies EchoMessage)
         .catch(() => {});
     };
 
@@ -349,17 +356,17 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
   useEffect(() => {
     let active = true;
 
-    getEkkoSettings()
+    getEchoSettings()
       .then((value) => {
         if (!active) return;
         setSettings(value);
         setSettingsReady(true);
       })
       .catch((error) => {
-        console.warn('Unable to load Ekko settings', error);
+        console.warn('Unable to load Echo settings', error);
       });
 
-    const dispose = observeEkkoSettings((value, changed) => {
+    const dispose = observeEchoSettings((value, changed) => {
       setSettings((prev) => ({
         floatingWidgetEnabled: changed.floatingWidgetEnabled ? value.floatingWidgetEnabled : prev.floatingWidgetEnabled,
         mode: changed.mode ? value.mode : prev.mode,
@@ -374,11 +381,11 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
     };
   }, []);
 
-  const applySettings = useCallback((partial: Partial<EkkoSettings>) => {
+  const applySettings = useCallback((partial: Partial<EchoSettings>) => {
     setSettings((prev) => {
       const optimistic = { ...prev, ...partial };
-      setEkkoSettings(partial).catch((error) => {
-        console.warn('Unable to update Ekko settings', error);
+      setEchoSettings(partial).catch((error) => {
+        console.warn('Unable to update Echo settings', error);
         setSettings(prev);
       });
       return optimistic;
@@ -599,6 +606,13 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
       : composeMicAvailable
       ? 'Ready'
       : 'Microphone unavailable';
+  const composeTranscriptDisplay = useMemo(() => {
+    const finalText = composeTranscript.trim();
+    const interimText = composeTranscriptInterim.trim();
+    return interimText
+      ? `${finalText}${finalText ? ' ' : ''}${interimText}`.trim()
+      : finalText;
+  }, [composeTranscript, composeTranscriptInterim]);
   const transcribeRecordDisabled = micStatus === 'pending' || (!sttSupported && !isRecording);
   const transcribeRecordTitle = transcribeRecordDisabled
     ? micStatus === 'pending'
@@ -638,6 +652,18 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
     : isComposeRecording
     ? 'Restart capture'
     : 'Start new capture';
+  const composeReplayDisabled = composeState !== 'idle' || !composeReplayReady;
+  const composeReplayTitle = composeReplayDisabled
+    ? !composeReplayReady
+      ? 'Record audio first'
+      : composeState === 'recording'
+      ? 'Stop recording to compose'
+      : composeState === 'processing'
+      ? 'Processing audio…'
+      : composeState === 'streaming'
+      ? 'Compose in progress…'
+      : composeRecordTitle
+    : 'Generate draft from the last recording';
 
   const micMessages = useMemo(() => {
     const messages: ReactNode[] = [];
@@ -778,8 +804,8 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
             transcript: activeTranscript,
             summary: result.content
           }
-        } satisfies EkkoMessage)
-        .then((response: EkkoResponse | undefined) => {
+        } satisfies EchoMessage)
+        .then((response: EchoResponse | undefined) => {
           if (response?.ok && response.data && typeof response.data === 'object') {
             const { id } = response.data as { id?: string };
             if (typeof id === 'string') {
@@ -897,8 +923,8 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
             transcript: activeTranscript,
             rewrite: result.content
           }
-        } satisfies EkkoMessage)
-        .then((response: EkkoResponse | undefined) => {
+        } satisfies EchoMessage)
+        .then((response: EchoResponse | undefined) => {
           if (response?.ok && response.data && typeof response.data === 'object') {
             const { id } = response.data as { id?: string };
             if (typeof id === 'string') {
@@ -964,7 +990,7 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
           paragraphs: normalized.paragraphs
         }
       }
-    } satisfies EkkoMessage);
+    } satisfies EchoMessage);
     return true;
   }, []);
 
@@ -987,7 +1013,7 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
         await runtime.sendMessage({
           type: 'ekko/direct-insert/apply',
           payload: { text: trimmed }
-        } satisfies EkkoMessage);
+        } satisfies EchoMessage);
         return true;
       }
 
@@ -1029,7 +1055,7 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
         .sendMessage({
           type: 'ekko/direct-insert/toggle',
           payload: { enabled }
-        } satisfies EkkoMessage)
+        } satisfies EchoMessage)
         .catch((error) => {
           console.warn('Unable to toggle direct insert bridge', error);
           throw error;
@@ -1199,7 +1225,7 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
     async (audioBuffer: ArrayBuffer) => {
       const preset = activeComposePreset;
       const instructions = composePrompt.trim();
-      console.info('[Ekko] side panel instruction:', instructions);
+      console.info('[Echo] side panel instruction:', instructions);
       const systemPrompt = instructions
         ? `${preset.systemPrompt}\n\nFollow these additional instructions exactly:\n${instructions}`
         : preset.systemPrompt;
@@ -1323,8 +1349,8 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
                   paragraphs: normalizedDraft.paragraphs
                 }
               }
-          } satisfies EkkoMessage)
-          .then((response: EkkoResponse | undefined) => {
+          } satisfies EchoMessage)
+          .then((response: EchoResponse | undefined) => {
             if (response?.ok && response.data && typeof response.data === 'object') {
               const { id } = response.data as { id?: string };
               if (typeof id === 'string') {
@@ -1371,6 +1397,110 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
     ]
   );
 
+  const stopComposeSpeechRecognition = useCallback(() => {
+    const recognition = composeSpeechRecognitionRef.current;
+    if (!recognition) {
+      return;
+    }
+    composeSpeechRecognitionRef.current = null;
+    const interim = composeTranscriptInterimRef.current.trim();
+    if (interim) {
+      composeTranscriptFinalRef.current = composeTranscriptFinalRef.current
+        ? `${composeTranscriptFinalRef.current} ${interim}`
+        : interim;
+    }
+    composeTranscriptFinalRef.current = composeTranscriptFinalRef.current.trim();
+    composeTranscriptInterimRef.current = '';
+    setComposeTranscript(composeTranscriptFinalRef.current);
+    setComposeTranscriptInterim('');
+    try {
+      recognition.stop();
+    } catch (error) {
+      console.warn('Unable to stop compose speech recognition', error);
+    }
+    recognition.onresult = null;
+    recognition.onerror = null;
+    recognition.onend = null;
+  }, []);
+
+  const startComposeSpeechRecognition = useCallback(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    const SpeechRecognitionCtor =
+      (window as typeof window & { webkitSpeechRecognition?: typeof SpeechRecognition }).SpeechRecognition ||
+      (window as typeof window & { webkitSpeechRecognition?: typeof SpeechRecognition }).webkitSpeechRecognition;
+
+    if (!SpeechRecognitionCtor) {
+      composeTranscriptFinalRef.current = '';
+      setComposeTranscript('');
+      setComposeTranscriptInterim('');
+      composeSpeechRecognitionRef.current = null;
+      return;
+    }
+
+    stopComposeSpeechRecognition();
+    composeTranscriptFinalRef.current = '';
+    composeTranscriptInterimRef.current = '';
+    setComposeTranscript('');
+    setComposeTranscriptInterim('');
+
+    const recognition = new SpeechRecognitionCtor();
+    recognition.lang = normalizedLanguage;
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 1;
+
+    recognition.onresult = (event: SpeechRecognitionEvent) => {
+      composeTranscriptInterimRef.current = '';
+      for (let i = event.resultIndex; i < event.results.length; i += 1) {
+        const result = event.results[i];
+        const transcript = result[0]?.transcript ?? '';
+        if (!transcript) continue;
+        if (result.isFinal) {
+          const normalized = transcript.trim();
+          composeTranscriptFinalRef.current = composeTranscriptFinalRef.current
+            ? `${composeTranscriptFinalRef.current} ${normalized}`
+            : normalized;
+        } else {
+          composeTranscriptInterimRef.current += transcript;
+        }
+      }
+      setComposeTranscript(composeTranscriptFinalRef.current.trim());
+      setComposeTranscriptInterim(composeTranscriptInterimRef.current.trim());
+    };
+
+    recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+      if (event.error !== 'aborted') {
+        console.warn('Compose speech recognition error', event);
+      }
+    };
+
+    recognition.onend = () => {
+      if (composeSpeechRecognitionRef.current === recognition) {
+        composeSpeechRecognitionRef.current = null;
+      }
+      const interim = composeTranscriptInterimRef.current.trim();
+      if (interim) {
+        composeTranscriptFinalRef.current = composeTranscriptFinalRef.current
+          ? `${composeTranscriptFinalRef.current} ${interim}`
+          : interim;
+        composeTranscriptInterimRef.current = '';
+        setComposeTranscriptInterim('');
+      }
+      composeTranscriptFinalRef.current = composeTranscriptFinalRef.current.trim();
+      setComposeTranscript(composeTranscriptFinalRef.current);
+    };
+
+    try {
+      recognition.start();
+      composeSpeechRecognitionRef.current = recognition;
+    } catch (error) {
+      console.warn('Unable to start compose speech recognition', error);
+      composeSpeechRecognitionRef.current = null;
+    }
+  }, [normalizedLanguage, stopComposeSpeechRecognition]);
+
   const handleStopComposeRecording = useCallback(
     (auto = false, { abort = false }: { abort?: boolean } = {}) => {
       if (composeState !== 'recording') {
@@ -1406,6 +1536,7 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
           composeRestartPendingRef.current = false;
         }
       }
+      stopComposeSpeechRecognition();
     },
     [composeState]
   );
@@ -1435,6 +1566,8 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
       setComposeElapsedMs(0);
       composeChunksRef.current = [];
       composeEntryIdRef.current = null;
+      lastComposeAudioRef.current = null;
+      setComposeReplayReady(false);
 
       ensurePromptSession().catch((error) => {
         const message =
@@ -1470,6 +1603,7 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
         }
         composeStartTimeRef.current = null;
         setComposeElapsedMs(0);
+        stopComposeSpeechRecognition();
         if (composeRecorderRef.current === stoppedRecorder) {
           composeRecorderRef.current = null;
         }
@@ -1509,6 +1643,8 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
         try {
           const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
           const buffer = await blob.arrayBuffer();
+          lastComposeAudioRef.current = buffer.slice(0);
+          setComposeReplayReady(true);
           await runCompose(buffer);
         } catch (processingError) {
           const message =
@@ -1527,11 +1663,13 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
         console.warn('MediaRecorder error', event);
         setComposeError('Chrome could not capture audio. Try again.');
         setComposeState('idle');
+        stopComposeSpeechRecognition();
       };
 
       recorder.start();
       composeStartTimeRef.current = Date.now();
       setComposeState('recording');
+      startComposeSpeechRecognition();
 
       composeTimerRef.current = window.setInterval(() => {
         if (!composeStartTimeRef.current) {
@@ -1557,7 +1695,9 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
     isPromptUnavailable,
     requestPermission,
     restorePromptAvailability,
-    runCompose
+    runCompose,
+    startComposeSpeechRecognition,
+    stopComposeSpeechRecognition
   ]);
 
   const handleRestartComposeRecording = useCallback(async () => {
@@ -1581,6 +1721,13 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
       window.clearInterval(composeTimerRef.current);
       composeTimerRef.current = null;
     }
+    stopComposeSpeechRecognition();
+    composeTranscriptFinalRef.current = '';
+    composeTranscriptInterimRef.current = '';
+    setComposeTranscript('');
+    setComposeTranscriptInterim('');
+    lastComposeAudioRef.current = null;
+    setComposeReplayReady(false);
 
     if (composeStateRef.current === 'recording') {
       composeRestartPendingRef.current = true;
@@ -1629,7 +1776,10 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
     setComposeError,
     setComposeRawPreview,
     setComposeState,
-    composeStateRef
+    composeStateRef,
+    stopComposeSpeechRecognition,
+    setComposeTranscript,
+    setComposeTranscriptInterim
   ]);
 
   useEffect(() => {
@@ -1651,7 +1801,14 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
     setComposeRawPreview('');
     setComposeState('idle');
     setComposeError('Compose request cancelled.');
-  }, []);
+    stopComposeSpeechRecognition();
+    lastComposeAudioRef.current = null;
+    setComposeReplayReady(false);
+    composeTranscriptFinalRef.current = '';
+    composeTranscriptInterimRef.current = '';
+    setComposeTranscript('');
+    setComposeTranscriptInterim('');
+  }, [stopComposeSpeechRecognition]);
 
   const handleCopyCompose = useCallback(async () => {
     const draft = composeDraft;
@@ -1664,6 +1821,26 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
       console.warn('Unable to copy compose output', error);
     }
   }, [composeDraft, composeRawPreview]);
+
+  const handleComposeReplay = useCallback(async () => {
+    if (composeState !== 'idle') {
+      setComposeError('Wait for the current compose to finish.');
+      return;
+    }
+    const lastAudio = lastComposeAudioRef.current;
+    if (!lastAudio) {
+      setComposeError('Record audio first, then tap Compose.');
+      return;
+    }
+    setComposeError(null);
+    try {
+      await runCompose(lastAudio.slice(0));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Compose failed.';
+      setComposeError(message);
+      setComposeState('idle');
+    }
+  }, [composeState, runCompose]);
 
   const handleInsertCompose = useCallback(() => {
     const draft = composeDraft;
@@ -1688,7 +1865,7 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
       ?.sendMessage({
         type: 'ekko/direct-insert/apply',
         payload: { draft: payload }
-      } satisfies EkkoMessage)
+      } satisfies EchoMessage)
       .catch((error: unknown) => {
         console.warn('Unable to insert compose draft into active field', error);
       });
@@ -1707,8 +1884,8 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
     setDirectInsertEnabled(false);
 
     chrome.runtime
-      ?.sendMessage({ type: 'ekko/direct-insert/query' } satisfies EkkoMessage)
-      .then((response: EkkoResponse | undefined) => {
+      ?.sendMessage({ type: 'ekko/direct-insert/query' } satisfies EchoMessage)
+      .then((response: EchoResponse | undefined) => {
         if (cancelled || !response || !response.ok || !response.data) {
           return;
         }
@@ -1719,7 +1896,7 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
         /* ignore: we will rely on initialized event */
       });
 
-    const handleInitMessage = (message: EkkoMessage) => {
+    const handleInitMessage = (message: EchoMessage) => {
       if (message.type === 'ekko/direct-insert/initialized' && !cancelled) {
         const enabled = !!message.payload?.enabled;
         setDirectInsertEnabled(enabled);
@@ -1827,6 +2004,16 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
   }, [mode, isRecording, stopRecording]);
 
   useEffect(() => {
+    if (mode !== 'compose') {
+      stopComposeSpeechRecognition();
+      composeTranscriptFinalRef.current = '';
+      composeTranscriptInterimRef.current = '';
+      setComposeTranscript('');
+      setComposeTranscriptInterim('');
+    }
+  }, [mode, stopComposeSpeechRecognition]);
+
+  useEffect(() => {
     if (!directInsertEnabled) {
       return;
     }
@@ -1851,8 +2038,8 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
             transcript: text,
             origin: 'panel'
           }
-        } satisfies EkkoMessage)
-        .then((response: EkkoResponse | undefined) => {
+        } satisfies EchoMessage)
+        .then((response: EchoResponse | undefined) => {
           if (cancelled || !directInsertEnabled) {
             return;
           }
@@ -1959,8 +2146,9 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
       composeSessionRef.current?.close?.();
       composeSessionRef.current = null;
       composeSessionPromiseRef.current = null;
+      stopComposeSpeechRecognition();
     };
-  }, []);
+  }, [stopComposeSpeechRecognition]);
 
   const handleTranscriptChange = useCallback(
     (value: string) => {
@@ -1975,12 +2163,12 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
       <header className="app__header">
         <div className="app__headline">
           <div className="brand" aria-live="polite">
-            <span className="brand__title">Ekko: Write with Voice</span>
+            <span className="brand__title">Echo: Write with Voice</span>
             <span className="brand__subtitle">Capture or compose with on-device AI.</span>
           </div>
           <span className="pill pill--muted">Chrome {chromeVersion}</span>
         </div>
-        <div className="mode-switch" role="tablist" aria-label="Ekko modes">
+        <div className="mode-switch" role="tablist" aria-label="Echo modes">
           <button
             type="button"
             role="tab"
@@ -2183,7 +2371,7 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
               Compose with AI
             </h2>
             <p className="helper-text">
-              Speak naturally—Gemini Nano will listen and draft the content for you.
+              Speak naturally and instruct what you want to write. Gemini Nano will listen and draft the content for you.
             </p>
             <div className="compose-controls">
               <button
@@ -2220,6 +2408,18 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
                 {formatDuration(composeElapsedMs)} / {formatDuration(COMPOSE_MAX_DURATION_MS)}
               </span>
             </div>
+            <div className="compose-transcript-preview">
+              <label htmlFor="compose-live-transcript" className="helper-text compose-transcript-preview__label">
+                Live transcript
+              </label>
+              <textarea
+                id="compose-live-transcript"
+                className="transcript-area transcript-area--readonly"
+                placeholder="Your transcript will appear here."
+                value={composeTranscriptDisplay}
+                readOnly
+              />
+            </div>
             <div className="compose-style">
               <label htmlFor="compose-style-select" className="helper-text compose-style__label">
                 Style
@@ -2252,18 +2452,37 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
                 if (composePromptDebounceRef.current) {
                   window.clearTimeout(composePromptDebounceRef.current);
                 }
-                composePromptDebounceRef.current = window.setTimeout(() => {
-                  applySettings({ composePrompt: value });
-                }, 400);
+                const trimmed = value.trim();
+                if (trimmed.length === 0) {
+                  composePromptDebounceRef.current = null;
+                  applySettings({ composePrompt: '' });
+                } else {
+                  composePromptDebounceRef.current = window.setTimeout(() => {
+                    applySettings({ composePrompt: value });
+                  }, 400);
+                }
               }}
               onBlur={() => {
                 if (composePromptDebounceRef.current) {
                   window.clearTimeout(composePromptDebounceRef.current);
                   composePromptDebounceRef.current = null;
                 }
-                applySettings({ composePrompt });
+                applySettings({ composePrompt: composePrompt.trim() });
               }}
             />
+            <div className="compose-replay">
+              <button
+                type="button"
+                className="button compose-replay__button"
+                onClick={handleComposeReplay}
+                disabled={composeReplayDisabled}
+                title={composeReplayTitle}
+                aria-label="Compose from last recording"
+              >
+                <FiPenTool size={16} aria-hidden="true" focusable="false" />
+                Compose
+              </button>
+            </div>
             <div className="compose-status" aria-live="polite">
               {promptAvailabilityState === 'downloadable' && (
                 <p className="helper-text">Chrome is downloading the on-device model. Keep this tab open.</p>
@@ -2382,30 +2601,31 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
                   <p className="history-item__subtitle">
                     {entry.createdAt} • {entry.actions.join(', ')}
                   </p>
-                  {entry.summary && (
-                    <p className="history-item__summary">
-                      <strong className="history-item__summary-label">Summary:</strong> {entry.summary}
-                    </p>
-                  )}
-                  {entry.rewrite && (
-                    <p className="history-item__summary">
-                      <strong className="history-item__summary-label">Rewrite:</strong> {entry.rewrite}
-                    </p>
-                  )}
-                  {entry.compose && (
-                    <p className="history-item__summary">
-                      <strong className="history-item__summary-label">
-                        Compose ({entry.compose.presetLabel}):
-                      </strong>{' '}
+                </div>
+                {entry.summary && (
+                  <div className="history-item__section">
+                    <span className="history-item__section-label">Summary</span>
+                    <div className="history-item__section-content">{entry.summary}</div>
+                  </div>
+                )}
+                {entry.rewrite && (
+                  <div className="history-item__section">
+                    <span className="history-item__section-label">Rewrite</span>
+                    <div className="history-item__section-content">{entry.rewrite}</div>
+                  </div>
+                )}
+                {entry.compose && (
+                  <div className="history-item__section">
+                    <span className="history-item__section-label">
+                      Compose • {entry.compose.presetLabel}
+                    </span>
+                    <div className="history-item__section-content">
                       {entry.compose.paragraphs && entry.compose.paragraphs.length > 0
                         ? joinParagraphs(entry.compose.paragraphs)
                         : entry.compose.output}
-                    </p>
-                  )}
-                </div>
-                <button type="button" className="button">
-                  Open
-                </button>
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
           </div>

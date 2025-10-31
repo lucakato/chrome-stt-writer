@@ -1,4 +1,4 @@
-import { EkkoMessage, EkkoResponse } from '@shared/messages';
+import { EchoMessage, EchoResponse } from '@shared/messages';
 import type { ComposeDraftFields } from '@shared/compose';
 
 declare global {
@@ -21,7 +21,7 @@ if (window.__ekkoDirectInsertInjected__) {
     return runtimeHealthy && typeof chrome !== 'undefined' && !!chrome.runtime?.id;
   }
 
-  function safeSendMessage(message: EkkoMessage) {
+  function safeSendMessage(message: EchoMessage) {
     if (!isRuntimeAvailable()) {
       return undefined;
     }
@@ -33,7 +33,7 @@ if (window.__ekkoDirectInsertInjected__) {
         disableListeners();
         window.__ekkoDirectInsertInjected__ = false;
       }
-      console.warn('[Ekko] Unable to send runtime message after reload', error);
+      console.warn('[Echo] Unable to send runtime message after reload', error);
       return undefined;
     }
   }
@@ -154,7 +154,7 @@ if (window.__ekkoDirectInsertInjected__) {
     }
 
     lastEditable = target;
-    const pending = safeSendMessage({ type: 'ekko/direct-insert/focus' } satisfies EkkoMessage);
+    const pending = safeSendMessage({ type: 'ekko/direct-insert/focus' } satisfies EchoMessage);
     if (pending && typeof (pending as Promise<unknown>).catch === 'function') {
       (pending as Promise<unknown>).catch(() => {
         /* ignore */
@@ -511,7 +511,7 @@ if (window.__ekkoDirectInsertInjected__) {
     lastEditable = null;
   }
 
-  chrome.runtime.onMessage.addListener((message: EkkoMessage, _sender, sendResponse) => {
+  chrome.runtime.onMessage.addListener((message: EchoMessage, _sender, sendResponse) => {
     let handled = false;
     let success = false;
     switch (message.type) {
@@ -567,9 +567,9 @@ if (window.__ekkoDirectInsertInjected__) {
     return undefined;
   });
 
-  const bootstrap = safeSendMessage({ type: 'ekko/direct-insert/query' } satisfies EkkoMessage);
+  const bootstrap = safeSendMessage({ type: 'ekko/direct-insert/query' } satisfies EchoMessage);
   if (bootstrap && typeof (bootstrap as Promise<unknown>).then === 'function') {
-    (bootstrap as Promise<EkkoResponse | undefined>)
+    (bootstrap as Promise<EchoResponse | undefined>)
       .then((response) => {
         if (!response || !response.ok || !response.data || typeof response.data !== 'object') {
           return;
