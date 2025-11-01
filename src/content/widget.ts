@@ -596,11 +596,51 @@ if (window.top !== window.self) {
 
     const normalized = normalizeComposeDraftResult(draft);
 
-    if (!normalized.content && lastDraft) {
+    const normalize = (value: string) => value.toLowerCase().replace(/\s+/g, ' ').trim();
+    const spokenInstructions = composeTranscriptFinal.trim();
+    const resultLooksLikeInstructions = () => {
+      if (!spokenInstructions) return false;
+      const normalizedResult = normalize(normalized.content);
+      const normalizedInstructions = normalize(spokenInstructions);
+      if (!normalizedResult || !normalizedInstructions) return false;
+      if (normalizedResult === normalizedInstructions) return true;
+      if (
+        normalizedResult.length <= normalizedInstructions.length + 20 &&
+        normalizedResult.includes(normalizedInstructions)
+      ) {
+        return true;
+      }
+      const instructionPhrases = ['i want you', 'can you', 'please', 'i need you'];
+      if (
+        instructionPhrases.some((phrase) => normalizedResult.startsWith(phrase)) &&
+        normalizedInstructions.length >= normalizedResult.length - 15
+      ) {
+        return true;
+      }
+      return false;
+    };
+
+    let finalDraft = normalized;
+
+    if (resultLooksLikeInstructions()) {
+      try {
+        const textCompose = await composeFromText({
+          text: spokenInstructions,
+          systemPrompt,
+          instruction: instruction ? instruction : undefined,
+          outputLanguage
+        });
+        finalDraft = normalizeComposeDraftResult(textCompose);
+      } catch (fallbackError) {
+        console.warn('Widget compose text fallback failed', fallbackError);
+      }
+    }
+
+    if (!finalDraft.content && lastDraft) {
       return normalizeComposeDraftResult(lastDraft);
     }
 
-    return normalized;
+    return finalDraft;
   }
 
   async function insertComposeDraft(draft: ComposeDraftResult) {

@@ -1262,11 +1262,11 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
           session = await ensurePromptSession();
         }
 
-        const text = await composeFromAudio({
-          audio: audioBuffer,
-          systemPrompt,
-          instruction: instructions || undefined,
-          outputLanguage,
+      const text = await composeFromAudio({
+        audio: audioBuffer,
+        systemPrompt,
+        instruction: instructions || undefined,
+        outputLanguage,
           onStatusChange: (status) => {
             setPromptAvailabilityState(status);
             if (status === 'downloadable') {
@@ -1303,8 +1303,62 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
           paragraphs: normalizedParagraphs
         };
 
-        setComposeDraft(normalizedDraft);
-        setComposeRawPreview(normalizedDraft.raw);
+        const normalize = (value: string) => value.toLowerCase().replace(/\s+/g, ' ').trim();
+        const spokenInstructions = composeTranscriptFinalRef.current.trim();
+        const resultLooksLikeInstructions = () => {
+          if (!spokenInstructions) return false;
+          const normalizedResult = normalize(normalizedDraft.content);
+          const normalizedInstructions = normalize(spokenInstructions);
+          if (!normalizedResult || !normalizedInstructions) return false;
+          if (normalizedResult === normalizedInstructions) return true;
+          if (
+            normalizedResult.length <= normalizedInstructions.length + 20 &&
+            normalizedResult.includes(normalizedInstructions)
+          ) {
+            return true;
+          }
+          const instructionPhrases = ['i want you', 'can you', 'please', 'i need you'];
+          if (
+            instructionPhrases.some((phrase) =>
+              normalizedResult.startsWith(phrase)
+            ) &&
+            normalizedInstructions.length >= normalizedResult.length - 15
+          ) {
+            return true;
+          }
+          return false;
+        };
+
+        let finalDraft = normalizedDraft;
+
+        if (resultLooksLikeInstructions()) {
+          try {
+            const textCompose = await composeFromText({
+              text: spokenInstructions,
+              systemPrompt,
+              instruction: instructions || undefined,
+              outputLanguage
+            });
+            const textParagraphs =
+              textCompose.paragraphs && textCompose.paragraphs.length > 0
+                ? textCompose.paragraphs
+                : deriveParagraphs(textCompose.content);
+            finalDraft = {
+              raw: textCompose.raw,
+              content: joinParagraphs(textParagraphs).trim(),
+              subject:
+                textCompose.subject && textCompose.subject.trim().length > 0
+                  ? textCompose.subject.trim()
+                  : undefined,
+              paragraphs: textParagraphs
+            };
+          } catch (fallbackError) {
+            console.warn('Compose text fallback failed', fallbackError);
+          }
+        }
+
+        setComposeDraft(finalDraft);
+        setComposeRawPreview(finalDraft.raw);
         setComposeState('idle');
         setComposeElapsedMs(0);
         composeAbortRef.current = null;

@@ -3,8 +3,22 @@
   "name": "Echo: Write with Voice",
   "description": "Capture speech, summarize, and rewrite text directly in Chrome’s side panel using on-device AI.",
   "version": "0.1.0",
+  "icons": {
+    "16": "icons/icon.png",
+    "32": "icons/icon.png",
+    "48": "icons/icon.png",
+    "64": "icons/icon.png",
+    "128": "icons/icon.png",
+    "256": "icons/icon.png",
+    "512": "icons/icon.png",
+    "1024": "icons/icon.png"
+  },
   "action": {
-    "default_title": "Echo: Write with Voice"
+    "default_title": "Echo: Write with Voice",
+    "default_icon": {
+      "16": "icons/icon.png",
+      "32": "icons/icon.png"
+    }
   },
   "permissions": [
     "storage",
