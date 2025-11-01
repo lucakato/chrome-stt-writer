@@ -5,6 +5,8 @@ import { MdKeyboardVoice } from 'react-icons/md';
 import { RiVoiceprintFill } from 'react-icons/ri';
 import { IoSettingsSharp } from 'react-icons/io5';
 import { FiCopy, FiCornerDownRight, FiRotateCcw, FiPenTool } from 'react-icons/fi';
+import { HiSparkles } from 'react-icons/hi';
+import { FaWandMagicSparkles } from 'react-icons/fa6';
 import type { EchoMessage, EchoResponse } from '@shared/messages';
 import {
   getEchoSettings,
@@ -47,6 +49,8 @@ const ICON_COPY = iconMarkup(FiCopy);
 const ICON_INSERT = iconMarkup(FiCornerDownRight);
 const ICON_RESTART = iconMarkup(FiRotateCcw);
 const ICON_COMPOSE = iconMarkup(FiPenTool);
+const ICON_REFINE = iconMarkup(HiSparkles);
+const ICON_POLISH = iconMarkup(FaWandMagicSparkles);
 const ICON_MIC_PROCESSING = '<span aria-hidden="true">⏳</span>';
 const WIDGET_COMPOSE_MAX_DURATION_MS = 90_000;
 const TEMP_DIRECT_INSERT_DELAY_MS = 150;
@@ -436,7 +440,7 @@ if (window.top !== window.self) {
         cursor: pointer;
         margin-left: auto;
       }
-      .ekko-transcribe-actions {
+            .ekko-transcribe-actions {
         display: none;
         flex-direction: column;
         align-items: flex-start;
@@ -459,6 +463,9 @@ if (window.top !== window.self) {
         cursor: pointer;
         font-size: 0.82rem;
         transition: background 0.2s ease;
+      }
+      .ekko-transcribe-actions__button-icon {
+        display: inline-flex;
       }
       .ekko-transcribe-actions__button:disabled {
         cursor: not-allowed;
@@ -1014,7 +1021,7 @@ if (window.top !== window.self) {
     refineButton = document.createElement('button');
     refineButton.type = 'button';
     refineButton.className = 'ekko-transcribe-actions__button';
-    refineButton.textContent = 'Refine';
+    refineButton.innerHTML = `<span class="ekko-transcribe-actions__button-icon">${ICON_REFINE}</span><span>Refine</span>`;
     refineButton.addEventListener('click', handleRefineClick);
 
     rewriteSelect = document.createElement('select');
@@ -1034,7 +1041,7 @@ if (window.top !== window.self) {
     polishButton = document.createElement('button');
     polishButton.type = 'button';
     polishButton.className = 'ekko-transcribe-actions__button';
-    polishButton.textContent = 'Polish';
+    polishButton.innerHTML = `<span class="ekko-transcribe-actions__button-icon">${ICON_POLISH}</span><span>Polish</span>`;
     polishButton.addEventListener('click', handlePolishClick);
 
     copyButton = document.createElement('button');
@@ -1510,12 +1517,20 @@ if (window.top !== window.self) {
 
     if (refineButton) {
       refineButton.disabled = !hasTranscript || refineBusy;
-      refineButton.textContent = refineBusy ? 'Refining…' : 'Refine';
+      if (refineBusy) {
+        refineButton.textContent = 'Refining…';
+      } else {
+        refineButton.innerHTML = `<span class="ekko-transcribe-actions__button-icon">${ICON_REFINE}</span><span>Refine</span>`;
+      }
     }
 
     if (polishButton) {
       polishButton.disabled = !hasTranscript || rewriterBusy;
-      polishButton.textContent = rewriterBusy ? 'Polishing…' : 'Polish';
+      if (rewriterBusy) {
+        polishButton.textContent = 'Polishing…';
+      } else {
+        polishButton.innerHTML = `<span class="ekko-transcribe-actions__button-icon">${ICON_POLISH}</span><span>Polish</span>`;
+      }
     }
 
     if (rewriteSelect) {

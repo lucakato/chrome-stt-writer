@@ -37,6 +37,8 @@ import { MdKeyboardVoice } from 'react-icons/md';
 import { LuAudioLines } from 'react-icons/lu';
 import { IoMicOffSharp } from 'react-icons/io5';
 import { FiRotateCcw, FiPenTool } from 'react-icons/fi';
+import { HiSparkles } from 'react-icons/hi';
+import { FaWandMagicSparkles } from 'react-icons/fa6';
 
 type Mode = 'transcribe' | 'compose';
 
@@ -2528,7 +2530,14 @@ const runCompose = useCallback(
                 disabled={!activeTranscript || isSummarizerBusy || summarizerUnavailable}
                 onClick={handleSummarize}
               >
-                {isSummarizerBusy ? 'Refining…' : 'Refine'}
+                {isSummarizerBusy ? (
+                  'Refining…'
+                ) : (
+                  <>
+                    <HiSparkles size={16} aria-hidden="true" focusable="false" />
+                    Refine
+                  </>
+                )}
               </button>
               <div className="actions-toolbar__group">
                 <select
@@ -2548,7 +2557,14 @@ const runCompose = useCallback(
                   disabled={!activeTranscript || isRewriterBusy || rewriterUnavailable}
                   onClick={handleRewrite}
                 >
-                  {isRewriterBusy ? 'Polishing…' : 'Polish'}
+                  {isRewriterBusy ? (
+                    'Polishing…'
+                  ) : (
+                    <>
+                      <FaWandMagicSparkles size={16} aria-hidden="true" focusable="false" />
+                      Polish
+                    </>
+                  )}
                 </button>
               </div>
               <button type="button" className="button" disabled={!activeTranscript} onClick={handleCopy}>
