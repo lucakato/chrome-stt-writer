@@ -268,7 +268,7 @@ export default function App() {
   const [rewritePreset, setRewritePreset] = useState<RewritePreset>('concise-formal');
   const [directInsertEnabledState, setDirectInsertEnabledState] = useState(true);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
-  const [streamingSummary, setStreamingSummary] = useState<string | null>(null);
+  const [previewContent, setPreviewContent] = useState<{ kind: "summary" | "rewrite"; text: string; label?: string } | null>(null);
   const [language, setLanguage] = useState<string>(() => navigator.language ?? 'en-US');
   const [onboardingDismissed, setOnboardingDismissed] = useState(false);
 
@@ -280,7 +280,6 @@ const [summarizerState, setSummarizerState] = useState<'idle' | 'checking' | Rew
   const [rewriterState, setRewriterState] = useState<'idle' | 'checking' | RewriterAvailabilityStatus | 'rewriting'>('idle');
   const [rewriterError, setRewriterError] = useState<string | null>(null);
   const [rewriterMessage, setRewriterMessage] = useState<string | null>(null);
-  const [rewritePreview, setRewritePreview] = useState<string | null>(null);
   const [insertBusy, setInsertBusy] = useState(false);
 
   const [promptAvailabilityState, setPromptAvailabilityState] = useState<'idle' | 'checking' | PromptAvailabilityStatus>('idle');
@@ -540,7 +539,7 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
     structuredInsertAbortRef.current?.abort();
     structuredInsertAbortRef.current = null;
     setInsertBusy(false);
-    setStreamingSummary(null);
+    setPreviewContent(null);
     setSummarizerState('idle');
     setSummarizerError(null);
     setSummarizerMessage(null);
@@ -548,7 +547,6 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
     setRewriterState('idle');
     setRewriterError(null);
     setRewriterMessage(null);
-    setRewritePreview(null);
     lastStructuredTranscriptRef.current = '';
     setTranscript('');
     clearInterim();
@@ -579,8 +577,6 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
     setRewriterError,
     setRewriterMessage,
     setRewriterState,
-    setRewritePreview,
-    setStreamingSummary,
     setSummarizerError,
     setSummarizerMessage,
     setSummarizerState,
@@ -719,6 +715,12 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
     : composeTranscriptHasText && !composeReplayReady
     ? 'Generate from typed instructions'
     : 'Generate draft from the last recording';
+  const previewTextDisplay = previewContent?.text?.trim() ?? '';
+  const previewCardClassName =
+    previewContent?.kind === 'rewrite'
+      ? 'summary-preview rewrite-preview'
+      : 'summary-preview';
+  const showPreviewCard = previewTextDisplay.length > 0;
 
   const micMessages = useMemo(() => {
     const messages: ReactNode[] = [];
@@ -797,7 +799,7 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
     setSummarizerState('summarizing');
     setSummarizerMessage('Refining text…');
     setDownloadProgress(null);
-    setStreamingSummary(null);
+    setPreviewContent(null);
 
     try {
       const result = await rewriteText({
@@ -823,7 +825,10 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
           setDownloadProgress(progress);
         },
         onChunk: (chunk) => {
-          setStreamingSummary(chunk);
+          const next = chunk.trim();
+          if (next) {
+            setPreviewContent({ kind: 'summary', text: next });
+          }
         }
       });
 
@@ -831,7 +836,10 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
       setSummarizerMessage(null);
       setSummarizerError(null);
       setDownloadProgress(null);
-      setStreamingSummary(result.content);
+      const finalSummary = (result.content ?? activeTranscript).trim();
+      setPreviewContent(
+        finalSummary.length > 0 ? { kind: 'summary', text: finalSummary } : null
+      );
 
       const entryId = activeSessionIdRef.current ?? crypto.randomUUID();
       activeSessionIdRef.current = entryId;
@@ -899,6 +907,7 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
       setSummarizerError(message);
       setSummarizerMessage(null);
       setDownloadProgress(null);
+      setPreviewContent(null);
     }
   }, [activeTranscript, outputLanguage, isRecording, interimTranscript]);
 
@@ -913,8 +922,8 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
     }
     setRewriterError(null);
     setRewriterMessage('Generating rewrite…');
+    setPreviewContent(null);
     setRewriterState('rewriting');
-    setRewritePreview(null);
 
     try {
       const result = await rewriteText({
@@ -941,14 +950,22 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
           setRewriterMessage(`Downloading on-device model… ${Math.round(progress * 100)}%`);
         },
         onChunk: (chunk) => {
-          setRewritePreview(chunk);
+          const next = chunk.trim();
+          if (next) {
+            setPreviewContent({ kind: 'rewrite', text: next, label: rewritePresetLabel });
+          }
         }
       });
 
       setRewriterState('ready');
       setRewriterMessage(null);
       setRewriterError(null);
-      setRewritePreview(result.content);
+      const finalRewrite = (result.content ?? '').trim();
+      setPreviewContent(
+        finalRewrite.length > 0
+          ? { kind: 'rewrite', text: finalRewrite, label: rewritePresetLabel }
+          : null
+      );
 
       const entryId = activeSessionIdRef.current ?? crypto.randomUUID();
       activeSessionIdRef.current = entryId;
@@ -1017,7 +1034,7 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
       setRewriterState('error');
       setRewriterError(message);
       setRewriterMessage(null);
-      setRewritePreview(null);
+      setPreviewContent(null);
     }
   }, [activeTranscript, outputLanguage, rewritePreset, rewritePresetLabel, isRecording, interimTranscript]);
 
@@ -1157,7 +1174,8 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
   );
 
   const handleInsertTranscript = useCallback(async () => {
-    const text = activeTranscript.trim();
+    const previewText = previewContent?.text?.trim();
+    const text = previewText && previewText.length > 0 ? previewText : activeTranscript.trim();
     if (!text) {
       setSummarizerMessage('Nothing to insert yet.');
       return;
@@ -1176,7 +1194,9 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
     try {
       await runWithDirectInsertBridge(() => insertTranscriptIntoPage(text));
       lastDirectInsertValueRef.current = text;
-      lastStructuredTranscriptRef.current = text;
+      const trimmedTranscript = activeTranscript.trim();
+      lastStructuredTranscriptRef.current =
+        previewText && previewText.length > 0 ? trimmedTranscript : text;
       setSummarizerMessage('Draft inserted into page.');
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to insert transcript.';
@@ -1199,6 +1219,7 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
     insertTranscriptIntoPage,
     isRewriterBusy,
     isSummarizerBusy,
+    previewContent,
     runWithDirectInsertBridge
   ]);
 
@@ -2602,20 +2623,14 @@ const runCompose = useCallback(
               {summarizerMessage && <p className="helper-text">{summarizerMessage}</p>}
               {summarizerError && <p className="helper-text danger">{summarizerError}</p>}
             </div>
-            {streamingSummary && (
-              <div className="summary-preview">
-                <strong className="summary-preview__title">Summary Preview</strong>
-                <p className="summary-preview__body">{streamingSummary}</p>
-              </div>
-            )}
             <div className="rewrite-status" aria-live="polite">
               {rewriterMessage && <p className="helper-text">{rewriterMessage}</p>}
               {rewriterError && <p className="helper-text danger">{rewriterError}</p>}
             </div>
-            {rewritePreview && (
-              <div className="summary-preview rewrite-preview">
-                <strong className="summary-preview__title">Rewrite Preview • {rewritePresetLabel}</strong>
-                <p className="summary-preview__body">{rewritePreview}</p>
+            {showPreviewCard && (
+              <div className={previewCardClassName}>
+                <strong className="summary-preview__title">Preview</strong>
+                <p className="summary-preview__body">{previewTextDisplay}</p>
               </div>
             )}
           </section>
