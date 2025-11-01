@@ -57,7 +57,7 @@ type WidgetRewritePreset =
   | 'casual'
   | 'bullet'
   | 'action-items'
-  | 'custom';
+  | 'shorten';
 
 type WidgetRewriteConfig = {
   sharedContext?: string;
@@ -126,11 +126,12 @@ const WIDGET_REWRITE_OPTIONS: Array<{
     }
   },
   {
-    id: 'custom',
-    label: 'Custom instructions',
+    id: 'shorten',
+    label: 'Shorten',
     config: {
       sharedContext: WIDGET_BASE_SHARED_CONTEXT,
-      context: 'Rewrite the text to improve clarity, flow, and readability while preserving the author’s intent.',
+      context: 'Rewrite the text so it is significantly shorter while preserving key information and readability.',
+      length: 'shorter',
       format: 'plain-text'
     }
   }

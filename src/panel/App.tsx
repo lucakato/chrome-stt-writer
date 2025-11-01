@@ -52,7 +52,7 @@ type RewritePreset =
   | 'casual'
   | 'bullet'
   | 'action-items'
-  | 'custom';
+  | 'shorten';
 
 type MicVisualState = 'idle' | 'recording' | 'off';
 
@@ -62,7 +62,17 @@ function MicIcon({ state }: { state: MicVisualState }) {
   return <Icon size={20} aria-hidden="true" focusable="false" />;
 }
 
-type ComposePresetId = 'freeform' | 'email-formal' | 'summary' | 'action-plan';
+type ComposePresetId =
+  | 'freeform'
+  | 'email-formal'
+  | 'summary'
+  | 'action-plan'
+  | 'concise-formal'
+  | 'expand'
+  | 'casual'
+  | 'bullet'
+  | 'action-items'
+  | 'shorten';
 
 type HistoryEntry = {
   id: string;
@@ -100,7 +110,7 @@ const rewritePresets: Array<{ id: RewritePreset; label: string }> = [
   { id: 'casual', label: 'Casual' },
   { id: 'bullet', label: 'Bullet list' },
   { id: 'action-items', label: 'Action items' },
-  { id: 'custom', label: 'Custom instructions' }
+  { id: 'shorten', label: 'Shorten' }
 ];
 
 const composePresets: Array<{ id: ComposePresetId; label: string; systemPrompt: string }> = [
@@ -127,6 +137,42 @@ const composePresets: Array<{ id: ComposePresetId; label: string; systemPrompt: 
     label: 'Action plan',
     systemPrompt:
       'You produce a clear action plan based on the user’s spoken intent. Return only the actionable steps (numbered or bullet list), keeping each step direct and free of meta commentary.'
+  },
+  {
+    id: 'concise-formal',
+    label: 'Concise • Formal',
+    systemPrompt:
+      'You craft concise, professional messages suitable for business communication. Transform the user’s instructions into a polished response addressed to the intended recipient. Use a clear subject when appropriate, stay courteous, and omit any meta commentary or explanations.'
+  },
+  {
+    id: 'expand',
+    label: 'Expand',
+    systemPrompt:
+      'You elaborate on the user’s instructions to produce a fuller, more detailed response. Provide helpful context and supporting details while staying faithful to the user’s intent. Respond directly to the recipient without adding guidance about how to use the message.'
+  },
+  {
+    id: 'casual',
+    label: 'Casual',
+    systemPrompt:
+      'You write in a relaxed, friendly tone. Turn the user’s instructions into an approachable message that sounds natural in everyday conversation, addressed directly to the recipient. Avoid meta commentary or explanations.'
+  },
+  {
+    id: 'bullet',
+    label: 'Bullet list',
+    systemPrompt:
+      'You return the final message as a concise bullet list that highlights the key points from the user’s instructions. Each bullet should be a complete, recipient-ready statement. Do not add prose outside the bullet list.'
+  },
+  {
+    id: 'action-items',
+    label: 'Action items',
+    systemPrompt:
+      'You provide a list of clear action items based on the user’s instructions. Use imperative language, include owners or deadlines when they are implied, and present the response as numbered steps or bullet items only.'
+  },
+  {
+    id: 'shorten',
+    label: 'Shorten',
+    systemPrompt:
+      'You create a significantly shorter message that still communicates the critical information from the user’s instructions. Respond from the user’s perspective, address the recipient directly, and avoid any meta commentary.'
   }
 ];
 
@@ -161,9 +207,10 @@ const rewritePresetConfig: Record<RewritePreset, RewritePresetConfig> = {
     format: 'plain-text',
     tone: 'more-direct'
   },
-  custom: {
+  shorten: {
     sharedContext: BASE_SHARED_CONTEXT,
-    context: 'Rewrite the text to improve clarity, flow, and readability while preserving the author’s intent.',
+    context: 'Rewrite the text so it is significantly shorter while preserving key information and readability.',
+    length: 'shorter',
     format: 'plain-text'
   }
 };
@@ -858,7 +905,7 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
       return;
     }
 
-    const presetConfig = rewritePresetConfig[rewritePreset] ?? rewritePresetConfig.custom;
+    const presetConfig = rewritePresetConfig[rewritePreset] ?? rewritePresetConfig['concise-formal'];
     if (!isRecording || !interimTranscript.trim()) {
       setTranscript(activeTranscript);
     }
@@ -1227,7 +1274,132 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
     return promise;
   }, [outputLanguage]);
 
-  const runCompose = useCallback(
+const runComposeFromText = useCallback(
+  async (textInput: string) => {
+    const trimmedInput = textInput.trim();
+    if (!trimmedInput) {
+      setComposeError('Provide instructions before composing.');
+      return;
+    }
+
+    const preset = activeComposePreset;
+    const instructions = composePrompt.trim();
+    const systemPrompt = instructions
+      ? `${preset.systemPrompt}\n\nFollow these additional instructions exactly:\n${instructions}`
+      : preset.systemPrompt;
+
+    setComposeError(null);
+    setComposeState('streaming');
+    setComposeDraft(null);
+    setComposeRawPreview('');
+    composeAbortRef.current = null;
+
+    const previousPromptState = promptAvailabilityStateRef.current;
+    const previousPromptMessage = promptAvailabilityMessageRef.current;
+
+    try {
+      let session: LanguageModelSession | null = composeSessionRef.current;
+      if (!session) {
+        const availability = await getPromptAvailability({
+          expectedInputs: [{ type: 'audio', languages: [outputLanguage] }],
+          expectedOutputs: [{ type: 'text', languages: [outputLanguage] }]
+        });
+
+        setPromptAvailabilityState(availability.status);
+        setPromptAvailabilityMessage(availability.message ?? null);
+
+        if (
+          availability.status === 'unsupported' ||
+          availability.status === 'unavailable' ||
+          availability.status === 'error'
+        ) {
+          const message = availability.message ?? 'Prompt API is not ready yet on this device.';
+          setComposeError(message);
+          setComposeState('idle');
+          return;
+        }
+
+        session = await ensurePromptSession();
+      }
+
+      const textDraft = await composeFromText({
+        text: trimmedInput,
+        systemPrompt,
+        instruction: instructions || undefined,
+        outputLanguage,
+        onStatusChange: (status) => {
+          setPromptAvailabilityState(status);
+          if (status === 'downloadable') {
+            setPromptAvailabilityMessage('Downloading the on-device model… keep this tab open while Chrome finishes.');
+          } else if (status === 'ready') {
+            setPromptAvailabilityMessage(null);
+          }
+        },
+        session
+      });
+
+      const normalizedParagraphs =
+        textDraft.paragraphs && textDraft.paragraphs.length > 0
+          ? textDraft.paragraphs
+          : deriveParagraphs(textDraft.content);
+      const normalizedDraft: ComposeDraftResult = {
+        raw: textDraft.raw,
+        content: joinParagraphs(normalizedParagraphs).trim(),
+        subject:
+          textDraft.subject && textDraft.subject.trim().length > 0
+            ? textDraft.subject.trim()
+            : undefined,
+        paragraphs: normalizedParagraphs
+      };
+
+      setComposeDraft(normalizedDraft);
+      setComposeRawPreview(normalizedDraft.raw ?? normalizedDraft.content);
+      setComposeState('idle');
+      setComposeElapsedMs(0);
+      composeAbortRef.current = null;
+      setComposeReplayReady(true);
+      lastComposeAudioRef.current = null;
+
+      const entryId = crypto.randomUUID();
+      composeEntryIdRef.current = entryId;
+      const createdAt = new Date().toLocaleTimeString();
+      const historyTitle =
+        normalizedDraft.subject ?? (normalizedDraft.content.slice(0, 60) || `${preset.label} draft`);
+
+      setHistory((entries) => [
+        {
+          id: entryId,
+          title: historyTitle,
+          createdAt,
+          actions: ['Composed'],
+          compose: {
+            presetId: preset.id,
+            presetLabel: preset.label,
+            instructions: instructions || undefined,
+            output: normalizedDraft.content,
+            subject: normalizedDraft.subject,
+            raw: normalizedDraft.raw,
+            paragraphs: normalizedDraft.paragraphs
+          }
+        },
+        ...entries
+      ]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Compose failed.';
+      setComposeError(message);
+      setComposeState('idle');
+      restorePromptAvailability(previousPromptState, previousPromptMessage);
+    }
+  }, [
+    activeComposePreset,
+    composePrompt,
+    ensurePromptSession,
+    outputLanguage,
+    restorePromptAvailability,
+    setHistory
+  ]);
+
+const runCompose = useCallback(
     async (audioBuffer: ArrayBuffer) => {
       const preset = activeComposePreset;
       const instructions = composePrompt.trim();
@@ -1364,10 +1536,11 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
         }
 
         setComposeDraft(finalDraft);
-        setComposeRawPreview(finalDraft.raw);
+        setComposeRawPreview(finalDraft.raw ?? finalDraft.content);
         setComposeState('idle');
         setComposeElapsedMs(0);
         composeAbortRef.current = null;
+        setComposeReplayReady(true);
 
         const entryId = crypto.randomUUID();
         composeEntryIdRef.current = entryId;
@@ -1453,134 +1626,11 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
       composePrompt,
       ensurePromptSession,
       outputLanguage,
-      restorePromptAvailability
+      restorePromptAvailability,
+      runComposeFromText
     ]
   );
 
-  const runComposeFromText = useCallback(
-    async (textInput: string) => {
-      const trimmedInput = textInput.trim();
-      if (!trimmedInput) {
-        setComposeError('Provide instructions before composing.');
-        return;
-      }
-
-      const preset = activeComposePreset;
-      const instructions = composePrompt.trim();
-      const systemPrompt = instructions
-        ? `${preset.systemPrompt}\n\nFollow these additional instructions exactly:\n${instructions}`
-        : preset.systemPrompt;
-
-      setComposeError(null);
-      setComposeState('streaming');
-      setComposeDraft(null);
-      setComposeRawPreview('');
-      composeAbortRef.current = null;
-
-      const previousPromptState = promptAvailabilityStateRef.current;
-      const previousPromptMessage = promptAvailabilityMessageRef.current;
-
-      try {
-        let session: LanguageModelSession | null = composeSessionRef.current;
-        if (!session) {
-          const availability = await getPromptAvailability({
-            expectedInputs: [{ type: 'audio', languages: [outputLanguage] }],
-            expectedOutputs: [{ type: 'text', languages: [outputLanguage] }]
-          });
-
-          setPromptAvailabilityState(availability.status);
-          setPromptAvailabilityMessage(availability.message ?? null);
-
-          if (
-            availability.status === 'unsupported' ||
-            availability.status === 'unavailable' ||
-            availability.status === 'error'
-          ) {
-            const message = availability.message ?? 'Prompt API is not ready yet on this device.';
-            setComposeError(message);
-            setComposeState('idle');
-            return;
-          }
-
-          session = await ensurePromptSession();
-        }
-
-        const textDraft = await composeFromText({
-          text: trimmedInput,
-          systemPrompt,
-          instruction: instructions || undefined,
-          outputLanguage,
-          onStatusChange: (status) => {
-            setPromptAvailabilityState(status);
-            if (status === 'downloadable') {
-              setPromptAvailabilityMessage('Downloading the on-device model… keep this tab open while Chrome finishes.');
-            } else if (status === 'ready') {
-              setPromptAvailabilityMessage(null);
-            }
-          },
-          session
-        });
-
-        const normalizedParagraphs =
-          textDraft.paragraphs && textDraft.paragraphs.length > 0
-            ? textDraft.paragraphs
-            : deriveParagraphs(textDraft.content);
-        const normalizedDraft: ComposeDraftResult = {
-          raw: textDraft.raw,
-          content: joinParagraphs(normalizedParagraphs).trim(),
-          subject:
-            textDraft.subject && textDraft.subject.trim().length > 0
-              ? textDraft.subject.trim()
-              : undefined,
-          paragraphs: normalizedParagraphs
-        };
-
-        setComposeDraft(normalizedDraft);
-        setComposeRawPreview(normalizedDraft.raw ?? normalizedDraft.content);
-        setComposeState('idle');
-        setComposeElapsedMs(0);
-        composeAbortRef.current = null;
-        setComposeReplayReady(true);
-        lastComposeAudioRef.current = null;
-
-        const entryId = crypto.randomUUID();
-        composeEntryIdRef.current = entryId;
-        const createdAt = new Date().toLocaleTimeString();
-        const historyTitle =
-          normalizedDraft.subject ?? (normalizedDraft.content.slice(0, 60) || `${preset.label} draft`);
-
-        setHistory((entries) => [
-          {
-            id: entryId,
-            title: historyTitle,
-            createdAt,
-            actions: ['Composed'],
-            compose: {
-              presetId: preset.id,
-              presetLabel: preset.label,
-              instructions: instructions || undefined,
-              output: normalizedDraft.content,
-              subject: normalizedDraft.subject,
-              raw: normalizedDraft.raw,
-              paragraphs: normalizedDraft.paragraphs
-            }
-          },
-          ...entries
-        ]);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Compose failed.';
-        setComposeError(message);
-        setComposeState('idle');
-        restorePromptAvailability(previousPromptState, previousPromptMessage);
-      }
-    }, [
-      activeComposePreset,
-      composePrompt,
-      ensurePromptSession,
-      outputLanguage,
-      restorePromptAvailability,
-      setHistory
-    ]);
 
   const stopComposeSpeechRecognition = useCallback(() => {
     const recognition = composeSpeechRecognitionRef.current;
