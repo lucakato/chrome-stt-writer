@@ -654,10 +654,12 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
     : isComposeRecording
     ? 'Restart capture'
     : 'Start new capture';
-  const composeReplayDisabled = composeState !== 'idle' || !composeReplayReady;
+  const composeTranscriptHasText = composeTranscript.trim().length > 0;
+  const composeReplayDisabled =
+    composeState !== 'idle' || (!composeReplayReady && !composeTranscriptHasText);
   const composeReplayTitle = composeReplayDisabled
-    ? !composeReplayReady
-      ? 'Record audio first'
+    ? !composeReplayReady && !composeTranscriptHasText
+      ? 'Record or type instructions first'
       : composeState === 'recording'
       ? 'Stop recording to compose'
       : composeState === 'processing'
@@ -665,6 +667,8 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
       : composeState === 'streaming'
       ? 'Compose in progress…'
       : composeRecordTitle
+    : composeTranscriptHasText && !composeReplayReady
+    ? 'Generate from typed instructions'
     : 'Generate draft from the last recording';
 
   const micMessages = useMemo(() => {
@@ -1453,6 +1457,131 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
     ]
   );
 
+  const runComposeFromText = useCallback(
+    async (textInput: string) => {
+      const trimmedInput = textInput.trim();
+      if (!trimmedInput) {
+        setComposeError('Provide instructions before composing.');
+        return;
+      }
+
+      const preset = activeComposePreset;
+      const instructions = composePrompt.trim();
+      const systemPrompt = instructions
+        ? `${preset.systemPrompt}\n\nFollow these additional instructions exactly:\n${instructions}`
+        : preset.systemPrompt;
+
+      setComposeError(null);
+      setComposeState('streaming');
+      setComposeDraft(null);
+      setComposeRawPreview('');
+      composeAbortRef.current = null;
+
+      const previousPromptState = promptAvailabilityStateRef.current;
+      const previousPromptMessage = promptAvailabilityMessageRef.current;
+
+      try {
+        let session: LanguageModelSession | null = composeSessionRef.current;
+        if (!session) {
+          const availability = await getPromptAvailability({
+            expectedInputs: [{ type: 'audio', languages: [outputLanguage] }],
+            expectedOutputs: [{ type: 'text', languages: [outputLanguage] }]
+          });
+
+          setPromptAvailabilityState(availability.status);
+          setPromptAvailabilityMessage(availability.message ?? null);
+
+          if (
+            availability.status === 'unsupported' ||
+            availability.status === 'unavailable' ||
+            availability.status === 'error'
+          ) {
+            const message = availability.message ?? 'Prompt API is not ready yet on this device.';
+            setComposeError(message);
+            setComposeState('idle');
+            return;
+          }
+
+          session = await ensurePromptSession();
+        }
+
+        const textDraft = await composeFromText({
+          text: trimmedInput,
+          systemPrompt,
+          instruction: instructions || undefined,
+          outputLanguage,
+          onStatusChange: (status) => {
+            setPromptAvailabilityState(status);
+            if (status === 'downloadable') {
+              setPromptAvailabilityMessage('Downloading the on-device model… keep this tab open while Chrome finishes.');
+            } else if (status === 'ready') {
+              setPromptAvailabilityMessage(null);
+            }
+          },
+          session
+        });
+
+        const normalizedParagraphs =
+          textDraft.paragraphs && textDraft.paragraphs.length > 0
+            ? textDraft.paragraphs
+            : deriveParagraphs(textDraft.content);
+        const normalizedDraft: ComposeDraftResult = {
+          raw: textDraft.raw,
+          content: joinParagraphs(normalizedParagraphs).trim(),
+          subject:
+            textDraft.subject && textDraft.subject.trim().length > 0
+              ? textDraft.subject.trim()
+              : undefined,
+          paragraphs: normalizedParagraphs
+        };
+
+        setComposeDraft(normalizedDraft);
+        setComposeRawPreview(normalizedDraft.raw ?? normalizedDraft.content);
+        setComposeState('idle');
+        setComposeElapsedMs(0);
+        composeAbortRef.current = null;
+        setComposeReplayReady(true);
+        lastComposeAudioRef.current = null;
+
+        const entryId = crypto.randomUUID();
+        composeEntryIdRef.current = entryId;
+        const createdAt = new Date().toLocaleTimeString();
+        const historyTitle =
+          normalizedDraft.subject ?? (normalizedDraft.content.slice(0, 60) || `${preset.label} draft`);
+
+        setHistory((entries) => [
+          {
+            id: entryId,
+            title: historyTitle,
+            createdAt,
+            actions: ['Composed'],
+            compose: {
+              presetId: preset.id,
+              presetLabel: preset.label,
+              instructions: instructions || undefined,
+              output: normalizedDraft.content,
+              subject: normalizedDraft.subject,
+              raw: normalizedDraft.raw,
+              paragraphs: normalizedDraft.paragraphs
+            }
+          },
+          ...entries
+        ]);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Compose failed.';
+        setComposeError(message);
+        setComposeState('idle');
+        restorePromptAvailability(previousPromptState, previousPromptMessage);
+      }
+    }, [
+      activeComposePreset,
+      composePrompt,
+      ensurePromptSession,
+      outputLanguage,
+      restorePromptAvailability,
+      setHistory
+    ]);
+
   const stopComposeSpeechRecognition = useCallback(() => {
     const recognition = composeSpeechRecognitionRef.current;
     if (!recognition) {
@@ -1883,20 +2012,27 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
       setComposeError('Wait for the current compose to finish.');
       return;
     }
-    const lastAudio = lastComposeAudioRef.current;
-    if (!lastAudio) {
-      setComposeError('Record audio first, then tap Compose.');
-      return;
-    }
     setComposeError(null);
     try {
+      const transcript = composeTranscript.trim();
+      const lastAudio = lastComposeAudioRef.current;
+      if (transcript && !lastAudio) {
+        await runComposeFromText(transcript);
+        return;
+      }
+
+      if (!lastAudio) {
+        setComposeError('Record audio first or type instructions above.');
+        return;
+      }
+
       await runCompose(lastAudio.slice(0));
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Compose failed.';
       setComposeError(message);
       setComposeState('idle');
     }
-  }, [composeState, runCompose]);
+  }, [composeState, composeTranscript, runCompose, runComposeFromText]);
 
   const handleInsertCompose = useCallback(() => {
     const draft = composeDraft;
