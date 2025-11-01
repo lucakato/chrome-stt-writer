@@ -287,6 +287,26 @@ async function toggleDirectInsert(enabled: boolean) {
   }
 }
 
+async function restoreCaretForTab(tabId: number): Promise<boolean> {
+  const message = {
+    type: 'ekko/direct-insert/restore'
+  } satisfies EchoMessage;
+
+  const frameId = directInsertFrameMap.get(tabId);
+  const options = typeof frameId === 'number' ? { frameId } : undefined;
+
+  try {
+    const response = await chrome.tabs.sendMessage(tabId, message, options);
+    if (response && typeof response === 'object' && (response as { success?: boolean }).success) {
+      return true;
+    }
+  } catch (error) {
+    console.warn('Unable to restore caret for direct insert', error);
+  }
+
+  return false;
+}
+
 async function handleTranscriptUpdate(
   message: Extract<EchoMessage, { type: 'ekko/transcript/update' }>
 ) {
@@ -309,6 +329,7 @@ async function handleTranscriptUpdate(
   }
 
   const frameId = directInsertFrameMap.get(tabId);
+  await restoreCaretForTab(tabId);
   const messageToSend = {
     type: 'ekko/transcript/update',
     payload: {
@@ -501,6 +522,8 @@ async function applyDirectInsertPayload(payload: DirectInsertPayload, tabIdOverr
     throw new Error('No active tab for direct insert.');
   }
 
+  const restored = await restoreCaretForTab(tabId);
+
   const sendApplyMessage = () => {
     const message = {
       type: 'ekko/direct-insert/apply',
@@ -523,6 +546,7 @@ async function applyDirectInsertPayload(payload: DirectInsertPayload, tabIdOverr
         target: { tabId, allFrames: true },
         files: ['content/directInsert.js']
       });
+      await restoreCaretForTab(tabId);
       await sendApplyMessage();
       await ensureDomInsertion(tabId, normalizedDraft);
     } catch (secondaryError) {

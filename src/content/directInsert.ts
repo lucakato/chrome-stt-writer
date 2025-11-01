@@ -15,6 +15,21 @@ if (window.__ekkoDirectInsertInjected__) {
   let directInsertEnabled = false;
   let lastEditable: HTMLElement | null = null;
 
+  type CaretState =
+    | {
+        type: 'input';
+        element: HTMLInputElement | HTMLTextAreaElement;
+        selectionStart: number;
+        selectionEnd: number;
+      }
+    | {
+        type: 'contenteditable';
+        element: HTMLElement;
+        range: Range | null;
+      };
+
+  let caretState: CaretState | null = null;
+
   let runtimeHealthy = true;
 
   function isRuntimeAvailable(): boolean {
@@ -153,7 +168,9 @@ if (window.__ekkoDirectInsertInjected__) {
       return;
     }
 
-    lastEditable = target;
+    const editableTarget = target as HTMLElement;
+    lastEditable = editableTarget;
+    updateCaretState(editableTarget);
     const pending = safeSendMessage({ type: 'ekko/direct-insert/focus' } satisfies EchoMessage);
     if (pending && typeof (pending as Promise<unknown>).catch === 'function') {
       (pending as Promise<unknown>).catch(() => {
@@ -176,6 +193,96 @@ if (window.__ekkoDirectInsertInjected__) {
     return null;
   }
 
+  function updateCaretState(element: HTMLElement) {
+    if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+      const start = element.selectionStart ?? element.value.length;
+      const end = element.selectionEnd ?? element.value.length;
+      caretState = {
+        type: 'input',
+        element,
+        selectionStart: start,
+        selectionEnd: end
+      };
+      return;
+    }
+
+    if (element.isContentEditable) {
+      const selection = element.ownerDocument.getSelection();
+      if (!selection || selection.rangeCount === 0) {
+        caretState = { type: 'contenteditable', element, range: null };
+        return;
+      }
+      const range = selection.getRangeAt(0);
+      if (!element.contains(range.startContainer)) {
+        return;
+      }
+      let clone: Range | null = null;
+      try {
+        clone = range.cloneRange();
+      } catch {
+        clone = null;
+      }
+      caretState = { type: 'contenteditable', element, range: clone };
+    }
+  }
+
+  function restoreCaretState(): boolean {
+    const state = caretState;
+    if (!state || !document.contains(state.element)) {
+      const fallback = resolveEditableTarget();
+      if (!fallback) {
+        return false;
+      }
+      focusTarget(fallback);
+      setCaretToEnd(fallback);
+      updateCaretState(fallback);
+      return true;
+    }
+
+    if (state.type === 'input') {
+      const element = state.element;
+      focusTarget(element);
+      const length = element.value.length;
+      const start = Math.min(state.selectionStart, length);
+      const end = Math.min(state.selectionEnd, length);
+      element.setSelectionRange(start, end);
+      updateCaretState(element);
+      return true;
+    }
+
+    if (state.type === 'contenteditable') {
+      const element = state.element;
+      focusTarget(element);
+      const selection = element.ownerDocument.getSelection();
+      if (!selection) {
+        setCaretToEnd(element);
+        updateCaretState(element);
+        return true;
+      }
+      selection.removeAllRanges();
+      if (state.range) {
+        try {
+          selection.addRange(state.range.cloneRange());
+        } catch {
+          setCaretToEnd(element);
+        }
+      } else {
+        setCaretToEnd(element);
+      }
+      updateCaretState(element);
+      return true;
+    }
+
+    return false;
+  }
+
+  function handleSelectionChange() {
+    const active = resolveEditableTarget();
+    if (active) {
+      updateCaretState(active);
+    }
+  }
+
   function focusTarget(target: HTMLElement) {
     if (typeof target.focus === 'function') {
       try {
@@ -190,6 +297,7 @@ if (window.__ekkoDirectInsertInjected__) {
     if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
       const length = target.value.length;
       target.setSelectionRange(length, length);
+      updateCaretState(target);
       return;
     }
 
@@ -203,6 +311,7 @@ if (window.__ekkoDirectInsertInjected__) {
       range.selectNodeContents(target);
       range.collapse(false);
       selection.addRange(range);
+      updateCaretState(target);
     }
   }
 
@@ -367,6 +476,7 @@ if (window.__ekkoDirectInsertInjected__) {
       target.value = nextValue;
       target.setSelectionRange(caretPos, caretPos);
       target.dispatchEvent(new Event('input', { bubbles: true }));
+      updateCaretState(target);
       return true;
     }
 
@@ -396,12 +506,14 @@ if (window.__ekkoDirectInsertInjected__) {
         selection.removeAllRanges();
         selection.addRange(range);
         target.dispatchEvent(new Event('input', { bubbles: true }));
+        updateCaretState(target);
         return true;
       }
 
       target.append(transcript);
       target.dispatchEvent(new Event('input', { bubbles: true }));
       setCaretToEnd(target);
+      updateCaretState(target);
       return true;
     }
 
@@ -504,11 +616,14 @@ if (window.__ekkoDirectInsertInjected__) {
 
   function enableListeners() {
     document.addEventListener('focusin', handleFocus, true);
+    document.addEventListener('selectionchange', handleSelectionChange, true);
   }
 
   function disableListeners() {
     document.removeEventListener('focusin', handleFocus, true);
+    document.removeEventListener('selectionchange', handleSelectionChange, true);
     lastEditable = null;
+    caretState = null;
   }
 
   chrome.runtime.onMessage.addListener((message: EchoMessage, _sender, sendResponse) => {
@@ -543,6 +658,10 @@ if (window.__ekkoDirectInsertInjected__) {
         } else {
           success = false;
         }
+        break;
+      case 'ekko/direct-insert/restore':
+        handled = true;
+        success = restoreCaretState();
         break;
       case 'ekko/transcript/update':
         if (!directInsertEnabled) {

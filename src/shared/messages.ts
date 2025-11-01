@@ -56,6 +56,10 @@ export type EchoMessage =
       payload?: Record<string, never>;
     }
   | {
+      type: 'ekko/direct-insert/restore';
+      payload?: Record<string, never>;
+    }
+  | {
       type: 'ekko/direct-insert/query';
       payload?: Record<string, never>;
     }

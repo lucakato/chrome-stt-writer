@@ -193,7 +193,7 @@ if (window.top !== window.self) {
   let composeTranscriptCard: HTMLDivElement | null = null;
   let composeTranscriptScroll: HTMLDivElement | null = null;
   let composeTranscriptPlaceholder: HTMLParagraphElement | null = null;
-  let composeTranscriptText: HTMLParagraphElement | null = null;
+  let composeTranscriptTextarea: HTMLTextAreaElement | null = null;
   let composeTranscriptValue = '';
   let transcribeActionsRow: HTMLDivElement | null = null;
   let refineButton: HTMLButtonElement | null = null;
@@ -897,9 +897,16 @@ if (window.top !== window.self) {
     composeTranscriptScroll = document.createElement('div');
     composeTranscriptScroll.className = 'ekko-output__scroll';
     composeTranscriptScroll.style.display = 'none';
-    composeTranscriptText = document.createElement('p');
-    composeTranscriptText.className = 'ekko-output__text';
-    composeTranscriptScroll.appendChild(composeTranscriptText);
+    composeTranscriptTextarea = document.createElement('textarea');
+    composeTranscriptTextarea.className = 'ekko-output__textarea';
+    composeTranscriptTextarea.placeholder = 'Your transcript will appear here.';
+    composeTranscriptTextarea.addEventListener('input', (event) => {
+      const value = (event.target as HTMLTextAreaElement).value;
+      composeTranscriptFinal = value;
+      composeTranscriptInterim = '';
+      composeTranscriptValue = value;
+    });
+    composeTranscriptScroll.appendChild(composeTranscriptTextarea);
     composeTranscriptPlaceholder = document.createElement('p');
     composeTranscriptPlaceholder.className = 'ekko-output__placeholder';
     composeTranscriptPlaceholder.textContent = 'Your transcript will appear here.';
@@ -1335,8 +1342,11 @@ if (window.top !== window.self) {
 
   function setComposeTranscript(text: string | null) {
     composeTranscriptValue = text && text.trim() ? text.trim() : '';
-    if (composeTranscriptText) {
-      composeTranscriptText.textContent = composeTranscriptValue;
+    if (composeTranscriptTextarea) {
+      const current = composeTranscriptTextarea.value;
+      if (current !== composeTranscriptValue) {
+        composeTranscriptTextarea.value = composeTranscriptValue;
+      }
     }
     if (composeTranscriptScroll) {
       composeTranscriptScroll.style.display = composeTranscriptValue ? 'block' : 'none';
@@ -1375,12 +1385,11 @@ if (window.top !== window.self) {
   }
 
   function updateComposeTranscriptDisplay() {
-    const finalText = composeTranscriptFinal.trim();
+    const finalText = composeTranscriptFinal;
     const interimText = composeTranscriptInterim.trim();
-    const combined = interimText
-      ? `${finalText}${finalText ? ' ' : ''}${interimText}`.trim()
-      : finalText;
-    setComposeTranscript(combined || null);
+    const needsSpace = finalText && !/[\s\n]$/.test(finalText) ? ' ' : '';
+    const combined = interimText ? `${finalText}${needsSpace}${interimText}` : finalText;
+    setComposeTranscript(combined ?? '');
   }
 
   function setTranscribeOutput(

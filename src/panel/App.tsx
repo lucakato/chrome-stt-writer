@@ -607,11 +607,13 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
       ? 'Ready'
       : 'Microphone unavailable';
   const composeTranscriptDisplay = useMemo(() => {
-    const finalText = composeTranscript.trim();
+    const finalText = composeTranscript;
     const interimText = composeTranscriptInterim.trim();
-    return interimText
-      ? `${finalText}${finalText ? ' ' : ''}${interimText}`.trim()
-      : finalText;
+    if (interimText) {
+      const needsSpace = finalText && !/[\s\n]$/.test(finalText) ? ' ' : '';
+      return `${finalText}${needsSpace}${interimText}`;
+    }
+    return finalText;
   }, [composeTranscript, composeTranscriptInterim]);
   const transcribeRecordDisabled = micStatus === 'pending' || (!sttSupported && !isRecording);
   const transcribeRecordTitle = transcribeRecordDisabled
@@ -2325,7 +2327,7 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
 
           <section className="panel-section panel-section--transcript" aria-labelledby="transcript-title">
             <h2 id="transcript-title" className="section-title">
-              Transcript
+              Live Transcript
             </h2>
             <textarea
               className="transcript-area"
@@ -2469,9 +2471,12 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
               <textarea
                 id="compose-live-transcript"
                 className="transcript-area transcript-area--readonly"
+                onChange={(event) => {
+                  setComposeTranscript(event.target.value);
+                  composeTranscriptFinalRef.current = event.target.value;
+                }}
                 placeholder="Your transcript will appear here."
                 value={composeTranscriptDisplay}
-                readOnly
               />
             </div>
             <div className="compose-style">
