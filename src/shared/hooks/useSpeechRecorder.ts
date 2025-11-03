@@ -134,7 +134,7 @@ export function useSpeechRecorder({
               typeof lastConfidence === 'number'
                 ? Number(lastConfidence.toFixed(3))
                 : undefined;
-            console.info('[Ekko] Speech recognition final result', {
+            console.info('[Echo] Speech recognition final result', {
               transcript: normalized,
               confidence: confidenceOutput
             });

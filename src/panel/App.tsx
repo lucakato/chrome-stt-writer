@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useMicrophonePermission } from '@shared/hooks/useMicrophonePermission';
 import { useSpeechRecorder } from '@shared/hooks/useSpeechRecorder';
-import type { EkkoMessage, EkkoResponse } from '@shared/messages';
+import type { EchoMessage, EchoResponse } from '@shared/messages';
 import { readOnboardingState, updateOnboardingState } from '@shared/storage/onboarding';
 import {
   getRewriterAvailability,
@@ -27,15 +27,18 @@ import {
 } from '@shared/compose';
 import {
   DEFAULT_SETTINGS,
-  getEkkoSettings,
-  observeEkkoSettings,
-  setEkkoSettings,
-  type EkkoMode,
-  type EkkoSettings
+  getEchoSettings,
+  observeEchoSettings,
+  setEchoSettings,
+  type EchoMode,
+  type EchoSettings
 } from '@shared/settings';
 import { MdKeyboardVoice } from 'react-icons/md';
 import { LuAudioLines } from 'react-icons/lu';
 import { IoMicOffSharp } from 'react-icons/io5';
+import { FiRotateCcw, FiPenTool } from 'react-icons/fi';
+import { HiSparkles } from 'react-icons/hi';
+import { FaWandMagicSparkles } from 'react-icons/fa6';
 
 type Mode = 'transcribe' | 'compose';
 
@@ -51,7 +54,7 @@ type RewritePreset =
   | 'casual'
   | 'bullet'
   | 'action-items'
-  | 'custom';
+  | 'shorten';
 
 type MicVisualState = 'idle' | 'recording' | 'off';
 
@@ -61,7 +64,17 @@ function MicIcon({ state }: { state: MicVisualState }) {
   return <Icon size={20} aria-hidden="true" focusable="false" />;
 }
 
-type ComposePresetId = 'freeform' | 'email-formal' | 'summary' | 'action-plan';
+type ComposePresetId =
+  | 'freeform'
+  | 'email-formal'
+  | 'summary'
+  | 'action-plan'
+  | 'concise-formal'
+  | 'expand'
+  | 'casual'
+  | 'bullet'
+  | 'action-items'
+  | 'shorten';
 
 type HistoryEntry = {
   id: string;
@@ -99,37 +112,69 @@ const rewritePresets: Array<{ id: RewritePreset; label: string }> = [
   { id: 'casual', label: 'Casual' },
   { id: 'bullet', label: 'Bullet list' },
   { id: 'action-items', label: 'Action items' },
-  { id: 'custom', label: 'Custom instructions' }
+  { id: 'shorten', label: 'Shorten' }
 ];
 
-const composePresets: Array<{ id: ComposePresetId; label: string; systemPrompt: string; helper: string }> = [
+const composePresets: Array<{ id: ComposePresetId; label: string; systemPrompt: string }> = [
   {
     id: 'freeform',
     label: 'Freeform',
-    helper: 'Great for open-ended questions or ideation.',
     systemPrompt:
-      'You are Ekko, an on-device writing assistant. Listen carefully and return a direct, helpful answer the user can use immediately. Reply in the user’s language, keep it concise, and avoid meta commentary or extra instructions.'
+      'You are Echo, an on-device writing assistant. The user will dictate instructions about the message they need. Transform those instructions into the finished text, written from the user’s perspective. If the user mentions a recipient, address that person directly. Include any requested structure (such as lists or bullet points) inside the message. Never mention the instructions, never explain what you are doing, and do not add guidance or meta commentary—return only the final deliverable the user can send immediately.'
   },
   {
     id: 'email-formal',
     label: 'Formal email',
-    helper: 'Draft polished outreach or apology emails.',
     systemPrompt:
       'You help users draft formal, polite emails. Produce the finished email text (include a subject line and sign-off when appropriate). Provide only the email—do not add guidance or commentary.'
   },
   {
     id: 'summary',
     label: 'Summary',
-    helper: 'Turn thoughts into concise summaries.',
     systemPrompt:
       'You summarize the user’s spoken input into a concise digest. Present only the distilled summary in clear prose or bullet points, without extra advice or explanation.'
   },
   {
     id: 'action-plan',
     label: 'Action plan',
-    helper: 'Outline next steps with clarity.',
     systemPrompt:
       'You produce a clear action plan based on the user’s spoken intent. Return only the actionable steps (numbered or bullet list), keeping each step direct and free of meta commentary.'
+  },
+  {
+    id: 'concise-formal',
+    label: 'Concise • Formal',
+    systemPrompt:
+      'You craft concise, professional messages suitable for business communication. Transform the user’s instructions into a polished response addressed to the intended recipient. Use a clear subject when appropriate, stay courteous, and omit any meta commentary or explanations.'
+  },
+  {
+    id: 'expand',
+    label: 'Expand',
+    systemPrompt:
+      'You elaborate on the user’s instructions to produce a fuller, more detailed response. Provide helpful context and supporting details while staying faithful to the user’s intent. Respond directly to the recipient without adding guidance about how to use the message.'
+  },
+  {
+    id: 'casual',
+    label: 'Casual',
+    systemPrompt:
+      'You write in a relaxed, friendly tone. Turn the user’s instructions into an approachable message that sounds natural in everyday conversation, addressed directly to the recipient. Avoid meta commentary or explanations.'
+  },
+  {
+    id: 'bullet',
+    label: 'Bullet list',
+    systemPrompt:
+      'You return the final message as a concise bullet list that highlights the key points from the user’s instructions. Each bullet should be a complete, recipient-ready statement. Do not add prose outside the bullet list.'
+  },
+  {
+    id: 'action-items',
+    label: 'Action items',
+    systemPrompt:
+      'You provide a list of clear action items based on the user’s instructions. Use imperative language, include owners or deadlines when they are implied, and present the response as numbered steps or bullet items only.'
+  },
+  {
+    id: 'shorten',
+    label: 'Shorten',
+    systemPrompt:
+      'You create a significantly shorter message that still communicates the critical information from the user’s instructions. Respond from the user’s perspective, address the recipient directly, and avoid any meta commentary.'
   }
 ];
 
@@ -164,9 +209,10 @@ const rewritePresetConfig: Record<RewritePreset, RewritePresetConfig> = {
     format: 'plain-text',
     tone: 'more-direct'
   },
-  custom: {
+  shorten: {
     sharedContext: BASE_SHARED_CONTEXT,
-    context: 'Rewrite the text to improve clarity, flow, and readability while preserving the author’s intent.',
+    context: 'Rewrite the text so it is significantly shorter while preserving key information and readability.',
+    length: 'shorter',
     format: 'plain-text'
   }
 };
@@ -215,14 +261,14 @@ function formatDuration(ms: number) {
 
 export default function App() {
   const { status: micStatus, requestPermission, error: micError } = useMicrophonePermission();
-  const [settings, setSettings] = useState<EkkoSettings>(DEFAULT_SETTINGS);
+  const [settings, setSettings] = useState<EchoSettings>(DEFAULT_SETTINGS);
   const [settingsReady, setSettingsReady] = useState(false);
 
   const [transcript, setTranscript] = useState('');
   const [rewritePreset, setRewritePreset] = useState<RewritePreset>('concise-formal');
   const [directInsertEnabledState, setDirectInsertEnabledState] = useState(true);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
-  const [streamingSummary, setStreamingSummary] = useState<string | null>(null);
+  const [previewContent, setPreviewContent] = useState<{ kind: "summary" | "rewrite"; text: string; label?: string } | null>(null);
   const [language, setLanguage] = useState<string>(() => navigator.language ?? 'en-US');
   const [onboardingDismissed, setOnboardingDismissed] = useState(false);
 
@@ -234,17 +280,19 @@ const [summarizerState, setSummarizerState] = useState<'idle' | 'checking' | Rew
   const [rewriterState, setRewriterState] = useState<'idle' | 'checking' | RewriterAvailabilityStatus | 'rewriting'>('idle');
   const [rewriterError, setRewriterError] = useState<string | null>(null);
   const [rewriterMessage, setRewriterMessage] = useState<string | null>(null);
-  const [rewritePreview, setRewritePreview] = useState<string | null>(null);
   const [insertBusy, setInsertBusy] = useState(false);
 
   const [promptAvailabilityState, setPromptAvailabilityState] = useState<'idle' | 'checking' | PromptAvailabilityStatus>('idle');
   const [promptAvailabilityMessage, setPromptAvailabilityMessage] = useState<string | null>(null);
   const [composePreset, setComposePreset] = useState<ComposePresetId>('freeform');
-  const [composeState, setComposeState] = useState<'idle' | 'recording' | 'processing' | 'streaming'>('idle');
-  const [composeError, setComposeError] = useState<string | null>(null);
-  const [composeDraft, setComposeDraft] = useState<ComposeDraftResult | null>(null);
-  const [composeRawPreview, setComposeRawPreview] = useState('');
-  const [composeElapsedMs, setComposeElapsedMs] = useState(0);
+const [composeState, setComposeState] = useState<'idle' | 'recording' | 'processing' | 'streaming'>('idle');
+const [composeError, setComposeError] = useState<string | null>(null);
+const [composeDraft, setComposeDraft] = useState<ComposeDraftResult | null>(null);
+const [composeRawPreview, setComposeRawPreview] = useState('');
+const [composeElapsedMs, setComposeElapsedMs] = useState(0);
+const [composeReplayReady, setComposeReplayReady] = useState(false);
+const [composeTranscript, setComposeTranscript] = useState('');
+const [composeTranscriptInterim, setComposeTranscriptInterim] = useState('');
   const activeSessionIdRef = useRef<string | null>(null);
   const lastDirectInsertValueRef = useRef<string>('');
   const lastStructuredTranscriptRef = useRef<string>('');
@@ -256,11 +304,42 @@ const [summarizerState, setSummarizerState] = useState<'idle' | 'checking' | Rew
   const composeStartTimeRef = useRef<number | null>(null);
   const composeAbortRef = useRef<AbortController | null>(null);
   const composeStreamRef = useRef<MediaStream | null>(null);
-  const composeEntryIdRef = useRef<string | null>(null);
+const composeSpeechRecognitionRef = useRef<SpeechRecognition | null>(null);
+const composeTranscriptFinalRef = useRef('');
+const composeTranscriptInterimRef = useRef('');
+const composeCleanupPendingRef = useRef(false);
+const composeEntryIdRef = useRef<string | null>(null);
+const lastComposeAudioRef = useRef<ArrayBuffer | null>(null);
+const composeStateRef = useRef(composeState);
+  const composeAbortNextRef = useRef(false);
+  const composeRestartPendingRef = useRef(false);
+  const restartTranscribePendingRef = useRef(false);
 const composeSessionRef = useRef<LanguageModelSession | null>(null);
 const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(null);
+const promptAvailabilityStateRef = useRef<'idle' | 'checking' | PromptAvailabilityStatus>(promptAvailabilityState);
+const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMessage);
 
   const directInsertEnabled = directInsertEnabledState;
+
+  useEffect(() => {
+    composeStateRef.current = composeState;
+  }, [composeState]);
+
+  useEffect(() => {
+    promptAvailabilityStateRef.current = promptAvailabilityState;
+  }, [promptAvailabilityState]);
+
+  useEffect(() => {
+    promptAvailabilityMessageRef.current = promptAvailabilityMessage;
+  }, [promptAvailabilityMessage]);
+
+  const restorePromptAvailability = useCallback(
+    (state: 'idle' | 'checking' | PromptAvailabilityStatus, message: string | null) => {
+      setPromptAvailabilityState(state);
+      setPromptAvailabilityMessage(message);
+    },
+    []
+  );
 
   const setDirectInsertEnabled = useCallback((enabled: boolean) => {
     setDirectInsertEnabledState(enabled);
@@ -274,7 +353,7 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
     try {
       const response = (await chrome.runtime.sendMessage({
         type: 'ekko/direct-insert/query'
-      } satisfies EkkoMessage)) as EkkoResponse | undefined;
+      } satisfies EchoMessage)) as EchoResponse | undefined;
       if (response && response.ok && response.data && typeof response.data === 'object') {
         const enabled = !!(response.data as { enabled?: boolean }).enabled;
         setDirectInsertEnabled(enabled);
@@ -290,7 +369,7 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
         ?.sendMessage({
           type: 'ekko/sidepanel/state',
           payload: { open, tabId, windowId }
-        } satisfies EkkoMessage)
+        } satisfies EchoMessage)
         .catch(() => {});
     };
 
@@ -325,17 +404,17 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
   useEffect(() => {
     let active = true;
 
-    getEkkoSettings()
+    getEchoSettings()
       .then((value) => {
         if (!active) return;
         setSettings(value);
         setSettingsReady(true);
       })
       .catch((error) => {
-        console.warn('Unable to load Ekko settings', error);
+        console.warn('Unable to load Echo settings', error);
       });
 
-    const dispose = observeEkkoSettings((value, changed) => {
+    const dispose = observeEchoSettings((value, changed) => {
       setSettings((prev) => ({
         floatingWidgetEnabled: changed.floatingWidgetEnabled ? value.floatingWidgetEnabled : prev.floatingWidgetEnabled,
         mode: changed.mode ? value.mode : prev.mode,
@@ -350,11 +429,11 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
     };
   }, []);
 
-  const applySettings = useCallback((partial: Partial<EkkoSettings>) => {
+  const applySettings = useCallback((partial: Partial<EchoSettings>) => {
     setSettings((prev) => {
       const optimistic = { ...prev, ...partial };
-      setEkkoSettings(partial).catch((error) => {
-        console.warn('Unable to update Ekko settings', error);
+      setEchoSettings(partial).catch((error) => {
+        console.warn('Unable to update Echo settings', error);
         setSettings(prev);
       });
       return optimistic;
@@ -393,6 +472,9 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
   }, [normalizedLanguage]);
 
   const appendFinalSegment = useCallback((segment: string) => {
+    if (restartTranscribePendingRef.current) {
+      return;
+    }
     setTranscript((prev) => {
       if (!prev) {
         return segment;
@@ -441,6 +523,68 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
       console.warn('Speech recognition failed to start.');
     }
   }, [isMicGranted, isRecording, requestPermission, resetSttError, startRecording, stopRecording, sttSupported]);
+
+  const handleRestartTranscribe = useCallback(async () => {
+    if (!isMicGranted) {
+      const granted = await requestPermission();
+      if (!granted) {
+        return;
+      }
+    }
+
+    if (!sttSupported && !isRecording) {
+      return;
+    }
+
+    structuredInsertAbortRef.current?.abort();
+    structuredInsertAbortRef.current = null;
+    setInsertBusy(false);
+    setPreviewContent(null);
+    setSummarizerState('idle');
+    setSummarizerError(null);
+    setSummarizerMessage(null);
+    setDownloadProgress(null);
+    setRewriterState('idle');
+    setRewriterError(null);
+    setRewriterMessage(null);
+    lastStructuredTranscriptRef.current = '';
+    setTranscript('');
+    clearInterim();
+    resetSttError();
+
+    if (isRecording) {
+      restartTranscribePendingRef.current = true;
+      stopRecording();
+      return;
+    }
+
+    if (!sttSupported) {
+      return;
+    }
+
+    const started = startRecording();
+    if (!started) {
+      console.warn('Speech recognition failed to start.');
+    }
+  }, [
+    clearInterim,
+    isMicGranted,
+    isRecording,
+    requestPermission,
+    resetSttError,
+    setDownloadProgress,
+    setInsertBusy,
+    setRewriterError,
+    setRewriterMessage,
+    setRewriterState,
+    setSummarizerError,
+    setSummarizerMessage,
+    setSummarizerState,
+    setTranscript,
+    startRecording,
+    stopRecording,
+    sttSupported
+  ]);
 
   const displayTranscript = useMemo(() => {
     if (!isRecording || !interimTranscript) {
@@ -507,6 +651,76 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
       : composeMicAvailable
       ? 'Ready'
       : 'Microphone unavailable';
+  const composeTranscriptDisplay = useMemo(() => {
+    const finalText = composeTranscript;
+    const interimText = composeTranscriptInterim.trim();
+    if (interimText) {
+      const needsSpace = finalText && !/[\s\n]$/.test(finalText) ? ' ' : '';
+      return `${finalText}${needsSpace}${interimText}`;
+    }
+    return finalText;
+  }, [composeTranscript, composeTranscriptInterim]);
+  const transcribeRecordDisabled = micStatus === 'pending' || (!sttSupported && !isRecording);
+  const transcribeRecordTitle = transcribeRecordDisabled
+    ? micStatus === 'pending'
+      ? 'Microphone permission pending…'
+      : 'Speech recognition unavailable'
+    : isRecording
+    ? 'Stop recording'
+    : 'Start recording';
+  const transcribeRestartDisabled = transcribeRecordDisabled;
+  const transcribeRestartTitle = transcribeRestartDisabled
+    ? transcribeRecordTitle
+    : isRecording
+    ? 'Restart recording'
+    : 'Start new recording';
+  const promptBlocksRecording =
+    promptAvailabilityState === 'checking' ||
+    promptAvailabilityState === 'unsupported' ||
+    promptAvailabilityState === 'unavailable' ||
+    promptAvailabilityState === 'error';
+  const composeRecordDisabled = isComposeBusy || promptBlocksRecording;
+  const composeRecordTitle = composeRecordDisabled
+    ? promptAvailabilityState === 'checking'
+      ? 'Checking on-device model availability…'
+      : promptAvailabilityState === 'unsupported'
+      ? 'Compose is unsupported on this device'
+      : promptAvailabilityState === 'unavailable'
+      ? 'On-device model not ready'
+      : promptAvailabilityState === 'error'
+      ? 'Compose unavailable right now'
+      : 'Compose busy'
+    : isComposeRecording
+    ? 'Stop capture'
+    : 'Start capture';
+  const composeRestartDisabled = composeRecordDisabled;
+  const composeRestartTitle = composeRestartDisabled
+    ? composeRecordTitle
+    : isComposeRecording
+    ? 'Restart capture'
+    : 'Start new capture';
+  const composeTranscriptHasText = composeTranscript.trim().length > 0;
+  const composeReplayDisabled =
+    composeState !== 'idle' || (!composeReplayReady && !composeTranscriptHasText);
+  const composeReplayTitle = composeReplayDisabled
+    ? !composeReplayReady && !composeTranscriptHasText
+      ? 'Record or type instructions first'
+      : composeState === 'recording'
+      ? 'Stop recording to compose'
+      : composeState === 'processing'
+      ? 'Processing audio…'
+      : composeState === 'streaming'
+      ? 'Compose in progress…'
+      : composeRecordTitle
+    : composeTranscriptHasText && !composeReplayReady
+    ? 'Generate from typed instructions'
+    : 'Generate draft from the last recording';
+  const previewTextDisplay = previewContent?.text?.trim() ?? '';
+  const previewCardClassName =
+    previewContent?.kind === 'rewrite'
+      ? 'summary-preview rewrite-preview'
+      : 'summary-preview';
+  const showPreviewCard = previewTextDisplay.length > 0;
 
   const micMessages = useMemo(() => {
     const messages: ReactNode[] = [];
@@ -515,8 +729,8 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
         <p key="mic-error" className="helper-text danger">
           {micError}
         </p>
-      );
-    }
+  );
+}
     if (!micError && micStatus === 'denied') {
       messages.push(
         <p key="mic-denied" className="helper-text danger">
@@ -549,6 +763,26 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
     return messages;
   }, [micError, micStatus, sttError, sttSupported]);
 
+  useEffect(() => {
+    if (!restartTranscribePendingRef.current || isRecording) {
+      return;
+    }
+    if (!isMicGranted) {
+      restartTranscribePendingRef.current = false;
+      return;
+    }
+    restartTranscribePendingRef.current = false;
+    if (!sttSupported) {
+      return;
+    }
+    resetSttError();
+    const started = startRecording();
+    if (!started) {
+      console.warn('Speech recognition failed to restart.');
+    }
+  }, [isMicGranted, isRecording, resetSttError, startRecording, sttSupported]);
+
+
   const showMicSettingsButton = micStatus === 'denied';
   const hasMicMessages = micMessages.length > 0;
   const shouldRenderMicMessages = hasMicMessages || showMicSettingsButton;
@@ -565,7 +799,7 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
     setSummarizerState('summarizing');
     setSummarizerMessage('Refining text…');
     setDownloadProgress(null);
-    setStreamingSummary(null);
+    setPreviewContent(null);
 
     try {
       const result = await rewriteText({
@@ -591,7 +825,10 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
           setDownloadProgress(progress);
         },
         onChunk: (chunk) => {
-          setStreamingSummary(chunk);
+          const next = chunk.trim();
+          if (next) {
+            setPreviewContent({ kind: 'summary', text: next });
+          }
         }
       });
 
@@ -599,7 +836,10 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
       setSummarizerMessage(null);
       setSummarizerError(null);
       setDownloadProgress(null);
-      setStreamingSummary(result.content);
+      const finalSummary = (result.content ?? activeTranscript).trim();
+      setPreviewContent(
+        finalSummary.length > 0 ? { kind: 'summary', text: finalSummary } : null
+      );
 
       const entryId = activeSessionIdRef.current ?? crypto.randomUUID();
       activeSessionIdRef.current = entryId;
@@ -627,8 +867,8 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
             transcript: activeTranscript,
             summary: result.content
           }
-        } satisfies EkkoMessage)
-        .then((response: EkkoResponse | undefined) => {
+        } satisfies EchoMessage)
+        .then((response: EchoResponse | undefined) => {
           if (response?.ok && response.data && typeof response.data === 'object') {
             const { id } = response.data as { id?: string };
             if (typeof id === 'string') {
@@ -667,6 +907,7 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
       setSummarizerError(message);
       setSummarizerMessage(null);
       setDownloadProgress(null);
+      setPreviewContent(null);
     }
   }, [activeTranscript, outputLanguage, isRecording, interimTranscript]);
 
@@ -675,14 +916,14 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
       return;
     }
 
-    const presetConfig = rewritePresetConfig[rewritePreset] ?? rewritePresetConfig.custom;
+    const presetConfig = rewritePresetConfig[rewritePreset] ?? rewritePresetConfig['concise-formal'];
     if (!isRecording || !interimTranscript.trim()) {
       setTranscript(activeTranscript);
     }
     setRewriterError(null);
     setRewriterMessage('Generating rewrite…');
+    setPreviewContent(null);
     setRewriterState('rewriting');
-    setRewritePreview(null);
 
     try {
       const result = await rewriteText({
@@ -709,14 +950,22 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
           setRewriterMessage(`Downloading on-device model… ${Math.round(progress * 100)}%`);
         },
         onChunk: (chunk) => {
-          setRewritePreview(chunk);
+          const next = chunk.trim();
+          if (next) {
+            setPreviewContent({ kind: 'rewrite', text: next, label: rewritePresetLabel });
+          }
         }
       });
 
       setRewriterState('ready');
       setRewriterMessage(null);
       setRewriterError(null);
-      setRewritePreview(result.content);
+      const finalRewrite = (result.content ?? '').trim();
+      setPreviewContent(
+        finalRewrite.length > 0
+          ? { kind: 'rewrite', text: finalRewrite, label: rewritePresetLabel }
+          : null
+      );
 
       const entryId = activeSessionIdRef.current ?? crypto.randomUUID();
       activeSessionIdRef.current = entryId;
@@ -746,8 +995,8 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
             transcript: activeTranscript,
             rewrite: result.content
           }
-        } satisfies EkkoMessage)
-        .then((response: EkkoResponse | undefined) => {
+        } satisfies EchoMessage)
+        .then((response: EchoResponse | undefined) => {
           if (response?.ok && response.data && typeof response.data === 'object') {
             const { id } = response.data as { id?: string };
             if (typeof id === 'string') {
@@ -785,7 +1034,7 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
       setRewriterState('error');
       setRewriterError(message);
       setRewriterMessage(null);
-      setRewritePreview(null);
+      setPreviewContent(null);
     }
   }, [activeTranscript, outputLanguage, rewritePreset, rewritePresetLabel, isRecording, interimTranscript]);
 
@@ -813,7 +1062,7 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
           paragraphs: normalized.paragraphs
         }
       }
-    } satisfies EkkoMessage);
+    } satisfies EchoMessage);
     return true;
   }, []);
 
@@ -836,7 +1085,7 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
         await runtime.sendMessage({
           type: 'ekko/direct-insert/apply',
           payload: { text: trimmed }
-        } satisfies EkkoMessage);
+        } satisfies EchoMessage);
         return true;
       }
 
@@ -878,7 +1127,7 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
         .sendMessage({
           type: 'ekko/direct-insert/toggle',
           payload: { enabled }
-        } satisfies EkkoMessage)
+        } satisfies EchoMessage)
         .catch((error) => {
           console.warn('Unable to toggle direct insert bridge', error);
           throw error;
@@ -925,7 +1174,8 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
   );
 
   const handleInsertTranscript = useCallback(async () => {
-    const text = activeTranscript.trim();
+    const previewText = previewContent?.text?.trim();
+    const text = previewText && previewText.length > 0 ? previewText : activeTranscript.trim();
     if (!text) {
       setSummarizerMessage('Nothing to insert yet.');
       return;
@@ -944,7 +1194,9 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
     try {
       await runWithDirectInsertBridge(() => insertTranscriptIntoPage(text));
       lastDirectInsertValueRef.current = text;
-      lastStructuredTranscriptRef.current = text;
+      const trimmedTranscript = activeTranscript.trim();
+      lastStructuredTranscriptRef.current =
+        previewText && previewText.length > 0 ? trimmedTranscript : text;
       setSummarizerMessage('Draft inserted into page.');
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to insert transcript.';
@@ -967,6 +1219,7 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
     insertTranscriptIntoPage,
     isRewriterBusy,
     isSummarizerBusy,
+    previewContent,
     runWithDirectInsertBridge
   ]);
 
@@ -1044,11 +1297,136 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
     return promise;
   }, [outputLanguage]);
 
-  const runCompose = useCallback(
+const runComposeFromText = useCallback(
+  async (textInput: string) => {
+    const trimmedInput = textInput.trim();
+    if (!trimmedInput) {
+      setComposeError('Provide instructions before composing.');
+      return;
+    }
+
+    const preset = activeComposePreset;
+    const instructions = composePrompt.trim();
+    const systemPrompt = instructions
+      ? `${preset.systemPrompt}\n\nFollow these additional instructions exactly:\n${instructions}`
+      : preset.systemPrompt;
+
+    setComposeError(null);
+    setComposeState('streaming');
+    setComposeDraft(null);
+    setComposeRawPreview('');
+    composeAbortRef.current = null;
+
+    const previousPromptState = promptAvailabilityStateRef.current;
+    const previousPromptMessage = promptAvailabilityMessageRef.current;
+
+    try {
+      let session: LanguageModelSession | null = composeSessionRef.current;
+      if (!session) {
+        const availability = await getPromptAvailability({
+          expectedInputs: [{ type: 'audio', languages: [outputLanguage] }],
+          expectedOutputs: [{ type: 'text', languages: [outputLanguage] }]
+        });
+
+        setPromptAvailabilityState(availability.status);
+        setPromptAvailabilityMessage(availability.message ?? null);
+
+        if (
+          availability.status === 'unsupported' ||
+          availability.status === 'unavailable' ||
+          availability.status === 'error'
+        ) {
+          const message = availability.message ?? 'Prompt API is not ready yet on this device.';
+          setComposeError(message);
+          setComposeState('idle');
+          return;
+        }
+
+        session = await ensurePromptSession();
+      }
+
+      const textDraft = await composeFromText({
+        text: trimmedInput,
+        systemPrompt,
+        instruction: instructions || undefined,
+        outputLanguage,
+        onStatusChange: (status) => {
+          setPromptAvailabilityState(status);
+          if (status === 'downloadable') {
+            setPromptAvailabilityMessage('Downloading the on-device model… keep this tab open while Chrome finishes.');
+          } else if (status === 'ready') {
+            setPromptAvailabilityMessage(null);
+          }
+        },
+        session
+      });
+
+      const normalizedParagraphs =
+        textDraft.paragraphs && textDraft.paragraphs.length > 0
+          ? textDraft.paragraphs
+          : deriveParagraphs(textDraft.content);
+      const normalizedDraft: ComposeDraftResult = {
+        raw: textDraft.raw,
+        content: joinParagraphs(normalizedParagraphs).trim(),
+        subject:
+          textDraft.subject && textDraft.subject.trim().length > 0
+            ? textDraft.subject.trim()
+            : undefined,
+        paragraphs: normalizedParagraphs
+      };
+
+      setComposeDraft(normalizedDraft);
+      setComposeRawPreview(normalizedDraft.raw ?? normalizedDraft.content);
+      setComposeState('idle');
+      setComposeElapsedMs(0);
+      composeAbortRef.current = null;
+      setComposeReplayReady(true);
+      lastComposeAudioRef.current = null;
+
+      const entryId = crypto.randomUUID();
+      composeEntryIdRef.current = entryId;
+      const createdAt = new Date().toLocaleTimeString();
+      const historyTitle =
+        normalizedDraft.subject ?? (normalizedDraft.content.slice(0, 60) || `${preset.label} draft`);
+
+      setHistory((entries) => [
+        {
+          id: entryId,
+          title: historyTitle,
+          createdAt,
+          actions: ['Composed'],
+          compose: {
+            presetId: preset.id,
+            presetLabel: preset.label,
+            instructions: instructions || undefined,
+            output: normalizedDraft.content,
+            subject: normalizedDraft.subject,
+            raw: normalizedDraft.raw,
+            paragraphs: normalizedDraft.paragraphs
+          }
+        },
+        ...entries
+      ]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Compose failed.';
+      setComposeError(message);
+      setComposeState('idle');
+      restorePromptAvailability(previousPromptState, previousPromptMessage);
+    }
+  }, [
+    activeComposePreset,
+    composePrompt,
+    ensurePromptSession,
+    outputLanguage,
+    restorePromptAvailability,
+    setHistory
+  ]);
+
+const runCompose = useCallback(
     async (audioBuffer: ArrayBuffer) => {
       const preset = activeComposePreset;
       const instructions = composePrompt.trim();
-      console.info('[Ekko] side panel instruction:', instructions);
+      console.info('[Echo] side panel instruction:', instructions);
       const systemPrompt = instructions
         ? `${preset.systemPrompt}\n\nFollow these additional instructions exactly:\n${instructions}`
         : preset.systemPrompt;
@@ -1060,6 +1438,9 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
 
       const abortController = new AbortController();
       composeAbortRef.current = abortController;
+
+      const previousPromptState = promptAvailabilityStateRef.current;
+      const previousPromptMessage = promptAvailabilityMessageRef.current;
 
       try {
         let session: LanguageModelSession | null = composeSessionRef.current;
@@ -1082,11 +1463,11 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
           session = await ensurePromptSession();
         }
 
-        const text = await composeFromAudio({
-          audio: audioBuffer,
-          systemPrompt,
-          instruction: instructions || undefined,
-          outputLanguage,
+      const text = await composeFromAudio({
+        audio: audioBuffer,
+        systemPrompt,
+        instruction: instructions || undefined,
+        outputLanguage,
           onStatusChange: (status) => {
             setPromptAvailabilityState(status);
             if (status === 'downloadable') {
@@ -1123,11 +1504,66 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
           paragraphs: normalizedParagraphs
         };
 
-        setComposeDraft(normalizedDraft);
-        setComposeRawPreview(normalizedDraft.raw);
+        const normalize = (value: string) => value.toLowerCase().replace(/\s+/g, ' ').trim();
+        const spokenInstructions = composeTranscriptFinalRef.current.trim();
+        const resultLooksLikeInstructions = () => {
+          if (!spokenInstructions) return false;
+          const normalizedResult = normalize(normalizedDraft.content);
+          const normalizedInstructions = normalize(spokenInstructions);
+          if (!normalizedResult || !normalizedInstructions) return false;
+          if (normalizedResult === normalizedInstructions) return true;
+          if (
+            normalizedResult.length <= normalizedInstructions.length + 20 &&
+            normalizedResult.includes(normalizedInstructions)
+          ) {
+            return true;
+          }
+          const instructionPhrases = ['i want you', 'can you', 'please', 'i need you'];
+          if (
+            instructionPhrases.some((phrase) =>
+              normalizedResult.startsWith(phrase)
+            ) &&
+            normalizedInstructions.length >= normalizedResult.length - 15
+          ) {
+            return true;
+          }
+          return false;
+        };
+
+        let finalDraft = normalizedDraft;
+
+        if (resultLooksLikeInstructions()) {
+          try {
+            const textCompose = await composeFromText({
+              text: spokenInstructions,
+              systemPrompt,
+              instruction: instructions || undefined,
+              outputLanguage
+            });
+            const textParagraphs =
+              textCompose.paragraphs && textCompose.paragraphs.length > 0
+                ? textCompose.paragraphs
+                : deriveParagraphs(textCompose.content);
+            finalDraft = {
+              raw: textCompose.raw,
+              content: joinParagraphs(textParagraphs).trim(),
+              subject:
+                textCompose.subject && textCompose.subject.trim().length > 0
+                  ? textCompose.subject.trim()
+                  : undefined,
+              paragraphs: textParagraphs
+            };
+          } catch (fallbackError) {
+            console.warn('Compose text fallback failed', fallbackError);
+          }
+        }
+
+        setComposeDraft(finalDraft);
+        setComposeRawPreview(finalDraft.raw ?? finalDraft.content);
         setComposeState('idle');
         setComposeElapsedMs(0);
         composeAbortRef.current = null;
+        setComposeReplayReady(true);
 
         const entryId = crypto.randomUUID();
         composeEntryIdRef.current = entryId;
@@ -1169,8 +1605,8 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
                   paragraphs: normalizedDraft.paragraphs
                 }
               }
-          } satisfies EkkoMessage)
-          .then((response: EkkoResponse | undefined) => {
+          } satisfies EchoMessage)
+          .then((response: EchoResponse | undefined) => {
             if (response?.ok && response.data && typeof response.data === 'object') {
               const { id } = response.data as { id?: string };
               if (typeof id === 'string') {
@@ -1199,6 +1635,7 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
           composeSessionRef.current?.destroy?.();
           composeSessionRef.current?.close?.();
           composeSessionRef.current = null;
+          restorePromptAvailability(previousPromptState, previousPromptMessage);
         }
         setComposeDraft(null);
         setComposeRawPreview('');
@@ -1207,11 +1644,123 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
         composeAbortRef.current = null;
       }
     },
-    [activeComposePreset, composePrompt, ensurePromptSession, outputLanguage]
+    [
+      activeComposePreset,
+      composePrompt,
+      ensurePromptSession,
+      outputLanguage,
+      restorePromptAvailability,
+      runComposeFromText
+    ]
   );
 
+
+  const stopComposeSpeechRecognition = useCallback(() => {
+    const recognition = composeSpeechRecognitionRef.current;
+    if (!recognition) {
+      return;
+    }
+    composeSpeechRecognitionRef.current = null;
+    const interim = composeTranscriptInterimRef.current.trim();
+    if (interim) {
+      composeTranscriptFinalRef.current = composeTranscriptFinalRef.current
+        ? `${composeTranscriptFinalRef.current} ${interim}`
+        : interim;
+    }
+    composeTranscriptFinalRef.current = composeTranscriptFinalRef.current.trim();
+    composeTranscriptInterimRef.current = '';
+    setComposeTranscript(composeTranscriptFinalRef.current);
+    setComposeTranscriptInterim('');
+    try {
+      recognition.stop();
+    } catch (error) {
+      console.warn('Unable to stop compose speech recognition', error);
+    }
+    recognition.onresult = null;
+    recognition.onerror = null;
+    recognition.onend = null;
+  }, []);
+
+  const startComposeSpeechRecognition = useCallback(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    const SpeechRecognitionCtor =
+      (window as typeof window & { webkitSpeechRecognition?: typeof SpeechRecognition }).SpeechRecognition ||
+      (window as typeof window & { webkitSpeechRecognition?: typeof SpeechRecognition }).webkitSpeechRecognition;
+
+    if (!SpeechRecognitionCtor) {
+      composeTranscriptFinalRef.current = '';
+      setComposeTranscript('');
+      setComposeTranscriptInterim('');
+      composeSpeechRecognitionRef.current = null;
+      return;
+    }
+
+    stopComposeSpeechRecognition();
+    composeTranscriptFinalRef.current = '';
+    composeTranscriptInterimRef.current = '';
+    setComposeTranscript('');
+    setComposeTranscriptInterim('');
+
+    const recognition = new SpeechRecognitionCtor();
+    recognition.lang = normalizedLanguage;
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 1;
+
+    recognition.onresult = (event: SpeechRecognitionEvent) => {
+      composeTranscriptInterimRef.current = '';
+      for (let i = event.resultIndex; i < event.results.length; i += 1) {
+        const result = event.results[i];
+        const transcript = result[0]?.transcript ?? '';
+        if (!transcript) continue;
+        if (result.isFinal) {
+          const normalized = transcript.trim();
+          composeTranscriptFinalRef.current = composeTranscriptFinalRef.current
+            ? `${composeTranscriptFinalRef.current} ${normalized}`
+            : normalized;
+        } else {
+          composeTranscriptInterimRef.current += transcript;
+        }
+      }
+      setComposeTranscript(composeTranscriptFinalRef.current.trim());
+      setComposeTranscriptInterim(composeTranscriptInterimRef.current.trim());
+    };
+
+    recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+      if (event.error !== 'aborted') {
+        console.warn('Compose speech recognition error', event);
+      }
+    };
+
+    recognition.onend = () => {
+      if (composeSpeechRecognitionRef.current === recognition) {
+        composeSpeechRecognitionRef.current = null;
+      }
+      const interim = composeTranscriptInterimRef.current.trim();
+      if (interim) {
+        composeTranscriptFinalRef.current = composeTranscriptFinalRef.current
+          ? `${composeTranscriptFinalRef.current} ${interim}`
+          : interim;
+        composeTranscriptInterimRef.current = '';
+        setComposeTranscriptInterim('');
+      }
+      composeTranscriptFinalRef.current = composeTranscriptFinalRef.current.trim();
+      setComposeTranscript(composeTranscriptFinalRef.current);
+    };
+
+    try {
+      recognition.start();
+      composeSpeechRecognitionRef.current = recognition;
+    } catch (error) {
+      console.warn('Unable to start compose speech recognition', error);
+      composeSpeechRecognitionRef.current = null;
+    }
+  }, [normalizedLanguage, stopComposeSpeechRecognition]);
+
   const handleStopComposeRecording = useCallback(
-    (auto = false) => {
+    (auto = false, { abort = false }: { abort?: boolean } = {}) => {
       if (composeState !== 'recording') {
         return;
       }
@@ -1225,8 +1774,14 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
         composeTimerRef.current = null;
       }
       composeStartTimeRef.current = null;
-      setComposeState('processing');
-      if (auto) {
+      if (abort) {
+        composeAbortNextRef.current = true;
+        setComposeState('idle');
+        setComposeError(null);
+      } else {
+        setComposeState('processing');
+      }
+      if (auto && !abort) {
         setComposeError('Recording paused after 90 seconds to keep sessions responsive.');
       }
       try {
@@ -1234,7 +1789,12 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
       } catch (error) {
         console.warn('Unable to stop compose recorder', error);
         setComposeState('idle');
+        if (abort) {
+          composeAbortNextRef.current = false;
+          composeRestartPendingRef.current = false;
+        }
       }
+      stopComposeSpeechRecognition();
     },
     [composeState]
   );
@@ -1247,7 +1807,7 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
       }
     }
 
-    if (composeState === 'recording') {
+    if (composeStateRef.current === 'recording') {
       handleStopComposeRecording();
       return;
     }
@@ -1264,6 +1824,8 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
       setComposeElapsedMs(0);
       composeChunksRef.current = [];
       composeEntryIdRef.current = null;
+      lastComposeAudioRef.current = null;
+      setComposeReplayReady(false);
 
       ensurePromptSession().catch((error) => {
         const message =
@@ -1281,6 +1843,8 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
           : undefined;
       const recorder = new MediaRecorder(stream, recorderOptions as MediaRecorderOptions | undefined);
       composeRecorderRef.current = recorder;
+      const previousPromptState = promptAvailabilityStateRef.current;
+      const previousPromptMessage = promptAvailabilityMessageRef.current;
 
       recorder.ondataavailable = (event) => {
         if (event.data && event.data.size > 0) {
@@ -1289,27 +1853,56 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
       };
 
       recorder.onstop = async () => {
+        const stoppedStream = stream;
+        const stoppedRecorder = recorder;
         if (composeTimerRef.current) {
           window.clearInterval(composeTimerRef.current);
           composeTimerRef.current = null;
         }
         composeStartTimeRef.current = null;
-        composeRecorderRef.current = null;
-        composeStreamRef.current?.getTracks().forEach((track) => track.stop());
-        composeStreamRef.current = null;
+        setComposeElapsedMs(0);
+        stopComposeSpeechRecognition();
+        if (composeRecorderRef.current === stoppedRecorder) {
+          composeRecorderRef.current = null;
+        }
+        stoppedStream.getTracks().forEach((track) => track.stop());
+        if (composeStreamRef.current === stoppedStream) {
+          composeStreamRef.current = null;
+        }
+
+        const aborted = composeAbortNextRef.current;
+        const restartPending = composeRestartPendingRef.current;
+        composeAbortNextRef.current = false;
+        composeCleanupPendingRef.current = false;
 
         const chunks = composeChunksRef.current;
         composeChunksRef.current = [];
 
+        if (aborted) {
+          setComposeDraft(null);
+          setComposeRawPreview('');
+          setComposeState('idle');
+          setComposeError(null);
+          composeEntryIdRef.current = null;
+          if (!restartPending) {
+            composeRestartPendingRef.current = false;
+          }
+          restorePromptAvailability(previousPromptState, previousPromptMessage);
+          return;
+        }
+
         if (!chunks.length) {
           setComposeError('No audio captured. Try recording again.');
           setComposeState('idle');
+          restorePromptAvailability(previousPromptState, previousPromptMessage);
           return;
         }
 
         try {
           const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
           const buffer = await blob.arrayBuffer();
+          lastComposeAudioRef.current = buffer.slice(0);
+          setComposeReplayReady(true);
           await runCompose(buffer);
         } catch (processingError) {
           const message =
@@ -1318,18 +1911,23 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
               : 'Unable to process recorded audio.';
           setComposeError(message);
           setComposeState('idle');
+          restorePromptAvailability(previousPromptState, previousPromptMessage);
         }
+
+        composeRestartPendingRef.current = false;
       };
 
       recorder.onerror = (event) => {
         console.warn('MediaRecorder error', event);
         setComposeError('Chrome could not capture audio. Try again.');
         setComposeState('idle');
+        stopComposeSpeechRecognition();
       };
 
       recorder.start();
       composeStartTimeRef.current = Date.now();
       setComposeState('recording');
+      startComposeSpeechRecognition();
 
       composeTimerRef.current = window.setInterval(() => {
         if (!composeStartTimeRef.current) {
@@ -1341,13 +1939,118 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
           handleStopComposeRecording(true);
         }
       }, 100);
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : 'Chrome could not access the microphone.';
-      setComposeError(message);
-      setComposeState('idle');
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : 'Chrome could not access the microphone.';
+    setComposeError(message);
+    setComposeState('idle');
+  }
+  }, [
+    composeStateRef,
+    ensurePromptSession,
+    handleStopComposeRecording,
+    isMicGranted,
+    isPromptUnavailable,
+    requestPermission,
+    restorePromptAvailability,
+    runCompose,
+    startComposeSpeechRecognition,
+    stopComposeSpeechRecognition
+  ]);
+
+  const handleRestartComposeRecording = useCallback(async () => {
+    if (!isMicGranted) {
+      const granted = await requestPermission();
+      if (!granted) {
+        return;
+      }
     }
-  }, [composeState, ensurePromptSession, handleStopComposeRecording, isMicGranted, isPromptUnavailable, requestPermission, runCompose]);
+
+    composeAbortRef.current?.abort();
+    composeAbortRef.current = null;
+    setComposeDraft(null);
+    setComposeRawPreview('');
+    setComposeError(null);
+    setComposeElapsedMs(0);
+    composeChunksRef.current = [];
+    composeEntryIdRef.current = null;
+    composeStartTimeRef.current = null;
+    if (composeTimerRef.current) {
+      window.clearInterval(composeTimerRef.current);
+      composeTimerRef.current = null;
+    }
+    stopComposeSpeechRecognition();
+    composeTranscriptFinalRef.current = '';
+    composeTranscriptInterimRef.current = '';
+    setComposeTranscript('');
+    setComposeTranscriptInterim('');
+    lastComposeAudioRef.current = null;
+    setComposeReplayReady(false);
+
+    if (composeStateRef.current === 'recording') {
+      composeRestartPendingRef.current = true;
+      composeCleanupPendingRef.current = true;
+      handleStopComposeRecording(false, { abort: true });
+      return;
+    }
+
+    if (composeStateRef.current === 'processing' || composeStateRef.current === 'streaming') {
+      composeRestartPendingRef.current = true;
+      composeCleanupPendingRef.current = true;
+      return;
+    }
+
+    composeRestartPendingRef.current = false;
+    composeAbortNextRef.current = false;
+    composeCleanupPendingRef.current = false;
+
+    if (composeRecorderRef.current) {
+      try {
+        if (composeRecorderRef.current.state === 'recording') {
+          composeRecorderRef.current.stop();
+        }
+      } catch {
+        /* ignore */
+      }
+      composeRecorderRef.current = null;
+    }
+    composeStreamRef.current?.getTracks().forEach((track) => track.stop());
+    composeStreamRef.current = null;
+
+    if (composeStateRef.current === 'idle') {
+      void handleStartComposeRecording();
+    } else {
+      setComposeState('idle');
+      composeRestartPendingRef.current = true;
+      composeCleanupPendingRef.current = true;
+    }
+  }, [
+    handleStartComposeRecording,
+    handleStopComposeRecording,
+    isMicGranted,
+    requestPermission,
+    setComposeDraft,
+    setComposeElapsedMs,
+    setComposeError,
+    setComposeRawPreview,
+    setComposeState,
+    composeStateRef,
+    stopComposeSpeechRecognition,
+    setComposeTranscript,
+    setComposeTranscriptInterim
+  ]);
+
+  useEffect(() => {
+    if (!composeRestartPendingRef.current) {
+      return;
+    }
+    if (composeState !== 'idle' || composeCleanupPendingRef.current) {
+      return;
+    }
+    composeRestartPendingRef.current = false;
+    composeAbortNextRef.current = false;
+    void handleStartComposeRecording();
+  }, [composeState, handleStartComposeRecording]);
 
   const handleCancelCompose = useCallback(() => {
     composeAbortRef.current?.abort();
@@ -1356,7 +2059,14 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
     setComposeRawPreview('');
     setComposeState('idle');
     setComposeError('Compose request cancelled.');
-  }, []);
+    stopComposeSpeechRecognition();
+    lastComposeAudioRef.current = null;
+    setComposeReplayReady(false);
+    composeTranscriptFinalRef.current = '';
+    composeTranscriptInterimRef.current = '';
+    setComposeTranscript('');
+    setComposeTranscriptInterim('');
+  }, [stopComposeSpeechRecognition]);
 
   const handleCopyCompose = useCallback(async () => {
     const draft = composeDraft;
@@ -1369,6 +2079,33 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
       console.warn('Unable to copy compose output', error);
     }
   }, [composeDraft, composeRawPreview]);
+
+  const handleComposeReplay = useCallback(async () => {
+    if (composeState !== 'idle') {
+      setComposeError('Wait for the current compose to finish.');
+      return;
+    }
+    setComposeError(null);
+    try {
+      const transcript = composeTranscript.trim();
+      const lastAudio = lastComposeAudioRef.current;
+      if (transcript && !lastAudio) {
+        await runComposeFromText(transcript);
+        return;
+      }
+
+      if (!lastAudio) {
+        setComposeError('Record audio first or type instructions above.');
+        return;
+      }
+
+      await runCompose(lastAudio.slice(0));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Compose failed.';
+      setComposeError(message);
+      setComposeState('idle');
+    }
+  }, [composeState, composeTranscript, runCompose, runComposeFromText]);
 
   const handleInsertCompose = useCallback(() => {
     const draft = composeDraft;
@@ -1393,7 +2130,7 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
       ?.sendMessage({
         type: 'ekko/direct-insert/apply',
         payload: { draft: payload }
-      } satisfies EkkoMessage)
+      } satisfies EchoMessage)
       .catch((error: unknown) => {
         console.warn('Unable to insert compose draft into active field', error);
       });
@@ -1412,8 +2149,8 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
     setDirectInsertEnabled(false);
 
     chrome.runtime
-      ?.sendMessage({ type: 'ekko/direct-insert/query' } satisfies EkkoMessage)
-      .then((response: EkkoResponse | undefined) => {
+      ?.sendMessage({ type: 'ekko/direct-insert/query' } satisfies EchoMessage)
+      .then((response: EchoResponse | undefined) => {
         if (cancelled || !response || !response.ok || !response.data) {
           return;
         }
@@ -1424,7 +2161,7 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
         /* ignore: we will rely on initialized event */
       });
 
-    const handleInitMessage = (message: EkkoMessage) => {
+    const handleInitMessage = (message: EchoMessage) => {
       if (message.type === 'ekko/direct-insert/initialized' && !cancelled) {
         const enabled = !!message.payload?.enabled;
         setDirectInsertEnabled(enabled);
@@ -1532,6 +2269,16 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
   }, [mode, isRecording, stopRecording]);
 
   useEffect(() => {
+    if (mode !== 'compose') {
+      stopComposeSpeechRecognition();
+      composeTranscriptFinalRef.current = '';
+      composeTranscriptInterimRef.current = '';
+      setComposeTranscript('');
+      setComposeTranscriptInterim('');
+    }
+  }, [mode, stopComposeSpeechRecognition]);
+
+  useEffect(() => {
     if (!directInsertEnabled) {
       return;
     }
@@ -1556,8 +2303,8 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
             transcript: text,
             origin: 'panel'
           }
-        } satisfies EkkoMessage)
-        .then((response: EkkoResponse | undefined) => {
+        } satisfies EchoMessage)
+        .then((response: EchoResponse | undefined) => {
           if (cancelled || !directInsertEnabled) {
             return;
           }
@@ -1664,8 +2411,9 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
       composeSessionRef.current?.close?.();
       composeSessionRef.current = null;
       composeSessionPromiseRef.current = null;
+      stopComposeSpeechRecognition();
     };
-  }, []);
+  }, [stopComposeSpeechRecognition]);
 
   const handleTranscriptChange = useCallback(
     (value: string) => {
@@ -1680,12 +2428,12 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
       <header className="app__header">
         <div className="app__headline">
           <div className="brand" aria-live="polite">
-            <span className="brand__title">Ekko: Write with Voice</span>
+            <span className="brand__title">Echo: Write with Voice</span>
             <span className="brand__subtitle">Capture or compose with on-device AI.</span>
           </div>
           <span className="pill pill--muted">Chrome {chromeVersion}</span>
         </div>
-        <div className="mode-switch" role="tablist" aria-label="Ekko modes">
+        <div className="mode-switch" role="tablist" aria-label="Echo modes">
           <button
             type="button"
             role="tab"
@@ -1716,15 +2464,26 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
                   type="button"
                   className={`record-button ${isRecording ? 'record-button--active' : ''}`}
                   onClick={handleToggleRecording}
-                  disabled={micStatus === 'pending' || (!sttSupported && !isRecording)}
+                  disabled={transcribeRecordDisabled}
+                  aria-label={isRecording ? 'Stop recording' : 'Start recording'}
+                  title={transcribeRecordTitle}
                 >
                   <span className={`record-button__icon record-button__icon--${transcribeMicState}`}>
                     <MicIcon state={transcribeMicState} />
                   </span>
-                  <span>{isRecording ? 'Stop recording' : 'Start recording'}</span>
                   <span className="sr-only" aria-live="polite">
                     {transcribeStatusText}
                   </span>
+                </button>
+                <button
+                  type="button"
+                  className="record-restart-button"
+                  onClick={handleRestartTranscribe}
+                  disabled={transcribeRestartDisabled}
+                  aria-label={isRecording ? 'Restart recording' : 'Start new recording'}
+                  title={transcribeRestartTitle}
+                >
+                  <FiRotateCcw size={18} aria-hidden="true" focusable="false" />
                 </button>
                 <span
                   className={`status-chip ${permissionMeta.active ? 'status-chip--active' : ''}`}
@@ -1777,7 +2536,7 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
 
           <section className="panel-section panel-section--transcript" aria-labelledby="transcript-title">
             <h2 id="transcript-title" className="section-title">
-              Transcript
+              Live Transcript
             </h2>
             <textarea
               className="transcript-area"
@@ -1792,7 +2551,14 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
                 disabled={!activeTranscript || isSummarizerBusy || summarizerUnavailable}
                 onClick={handleSummarize}
               >
-                {isSummarizerBusy ? 'Refining…' : 'Refine'}
+                {isSummarizerBusy ? (
+                  'Refining…'
+                ) : (
+                  <>
+                    <HiSparkles size={16} aria-hidden="true" focusable="false" />
+                    Refine
+                  </>
+                )}
               </button>
               <div className="actions-toolbar__group">
                 <select
@@ -1812,7 +2578,14 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
                   disabled={!activeTranscript || isRewriterBusy || rewriterUnavailable}
                   onClick={handleRewrite}
                 >
-                  {isRewriterBusy ? 'Polishing…' : 'Polish'}
+                  {isRewriterBusy ? (
+                    'Polishing…'
+                  ) : (
+                    <>
+                      <FaWandMagicSparkles size={16} aria-hidden="true" focusable="false" />
+                      Polish
+                    </>
+                  )}
                 </button>
               </div>
               <button type="button" className="button" disabled={!activeTranscript} onClick={handleCopy}>
@@ -1850,20 +2623,14 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
               {summarizerMessage && <p className="helper-text">{summarizerMessage}</p>}
               {summarizerError && <p className="helper-text danger">{summarizerError}</p>}
             </div>
-            {streamingSummary && (
-              <div className="summary-preview">
-                <strong className="summary-preview__title">Summary Preview</strong>
-                <p className="summary-preview__body">{streamingSummary}</p>
-              </div>
-            )}
             <div className="rewrite-status" aria-live="polite">
               {rewriterMessage && <p className="helper-text">{rewriterMessage}</p>}
               {rewriterError && <p className="helper-text danger">{rewriterError}</p>}
             </div>
-            {rewritePreview && (
-              <div className="summary-preview rewrite-preview">
-                <strong className="summary-preview__title">Rewrite Preview • {rewritePresetLabel}</strong>
-                <p className="summary-preview__body">{rewritePreview}</p>
+            {showPreviewCard && (
+              <div className={previewCardClassName}>
+                <strong className="summary-preview__title">Preview</strong>
+                <p className="summary-preview__body">{previewTextDisplay}</p>
               </div>
             )}
           </section>
@@ -1877,77 +2644,33 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
               Compose with AI
             </h2>
             <p className="helper-text">
-              Speak naturally—Gemini Nano will listen and draft the content for you.
+              Speak naturally and instruct what you want to write. Gemini Nano will listen and draft the content for you.
             </p>
-            <div>
-              <p className="helper-text" style={{ marginBottom: '4px' }}>
-                Draft style
-              </p>
-              <div className="compose-chip-group" role="listbox" aria-label="Compose style">
-                {composePresets.map((preset) => (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    role="option"
-                    aria-selected={composePreset === preset.id}
-                    className={`compose-chip ${composePreset === preset.id ? 'compose-chip--active' : ''}`}
-                    onClick={() => setComposePreset(preset.id)}
-                  >
-                    {preset.label}
-                  </button>
-                ))}
-              </div>
-              <p className="helper-text" style={{ marginTop: '4px' }}>
-                {activeComposePreset.helper}
-              </p>
-            </div>
-            <label htmlFor="compose-instruction" className="helper-text" style={{ fontWeight: 600 }}>
-              Optional typed context
-            </label>
-            <textarea
-              id="compose-instruction"
-              className="transcript-area"
-              style={{ minHeight: '80px' }}
-              placeholder="Add details Gemini should know (recipient, tone, bullet points)…"
-              value={composePrompt}
-              onChange={(event) => {
-                const value = event.target.value;
-                setSettings((prev) => ({ ...prev, composePrompt: value }));
-                if (composePromptDebounceRef.current) {
-                  window.clearTimeout(composePromptDebounceRef.current);
-                }
-                composePromptDebounceRef.current = window.setTimeout(() => {
-                  applySettings({ composePrompt: value });
-                }, 400);
-              }}
-              onBlur={() => {
-                if (composePromptDebounceRef.current) {
-                  window.clearTimeout(composePromptDebounceRef.current);
-                  composePromptDebounceRef.current = null;
-                }
-                applySettings({ composePrompt });
-              }}
-            />
             <div className="compose-controls">
               <button
                 type="button"
                 className={`record-button ${isComposeRecording ? 'record-button--active' : ''}`}
                 onClick={isComposeRecording ? () => handleStopComposeRecording(false) : handleStartComposeRecording}
-                disabled={
-                  isComposeBusy ||
-                  promptAvailabilityState === 'checking' ||
-                  promptAvailabilityState === 'unsupported' ||
-                  promptAvailabilityState === 'unavailable' ||
-                  promptAvailabilityState === 'error'
-                }
+                disabled={composeRecordDisabled}
+                aria-label={isComposeRecording ? 'Stop capture' : 'Start capture'}
+                title={composeRecordTitle}
               >
                 <span className={`record-button__icon record-button__icon--${composeMicState}`}>
                   <MicIcon state={composeMicState} />
                 </span>
-                <span>{isComposeRecording ? 'Stop capture' : 'Start capture'}</span>
                 <span className="sr-only" aria-live="polite">
                   {composeStatusText}
                 </span>
+              </button>
+              <button
+                type="button"
+                className="record-restart-button"
+                onClick={handleRestartComposeRecording}
+                disabled={composeRestartDisabled}
+                aria-label={isComposeRecording ? 'Restart capture' : 'Start new capture'}
+                title={composeRestartTitle}
+              >
+                <FiRotateCcw size={18} aria-hidden="true" focusable="false" />
               </button>
               {composeState === 'streaming' && (
                 <button type="button" className="button button--outline" onClick={handleCancelCompose}>
@@ -1958,12 +2681,90 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
                 {formatDuration(composeElapsedMs)} / {formatDuration(COMPOSE_MAX_DURATION_MS)}
               </span>
             </div>
+            <div className="compose-transcript-preview">
+              <label htmlFor="compose-live-transcript" className="helper-text compose-transcript-preview__label">
+                Live transcript
+              </label>
+              <textarea
+                id="compose-live-transcript"
+                className="transcript-area transcript-area--readonly"
+                onChange={(event) => {
+                  setComposeTranscript(event.target.value);
+                  composeTranscriptFinalRef.current = event.target.value;
+                }}
+                placeholder="Your transcript will appear here."
+                value={composeTranscriptDisplay}
+              />
+            </div>
+            <div className="compose-style">
+              <label htmlFor="compose-style-select" className="helper-text compose-style__label">
+                Style
+              </label>
+              <select
+                id="compose-style-select"
+                className="select compose-style__select"
+                value={composePreset}
+                onChange={(event) => setComposePreset(event.target.value as ComposePresetId)}
+              >
+                {composePresets.map((preset) => (
+                  <option key={preset.id} value={preset.id}>
+                    {preset.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <label htmlFor="compose-instruction" className="helper-text" style={{ fontWeight: 600 }}>
+              Optional typed context
+            </label>
+            <textarea
+              id="compose-instruction"
+              className="transcript-area transcript-area--hint-small"
+              style={{ minHeight: '80px' }}
+              placeholder="Add details Gemini should know (recipient, tone, bullet points)…"
+              value={composePrompt}
+              onChange={(event) => {
+                const value = event.target.value;
+                setSettings((prev) => ({ ...prev, composePrompt: value }));
+                if (composePromptDebounceRef.current) {
+                  window.clearTimeout(composePromptDebounceRef.current);
+                }
+                const trimmed = value.trim();
+                if (trimmed.length === 0) {
+                  composePromptDebounceRef.current = null;
+                  applySettings({ composePrompt: '' });
+                } else {
+                  composePromptDebounceRef.current = window.setTimeout(() => {
+                    applySettings({ composePrompt: value });
+                  }, 400);
+                }
+              }}
+              onBlur={() => {
+                if (composePromptDebounceRef.current) {
+                  window.clearTimeout(composePromptDebounceRef.current);
+                  composePromptDebounceRef.current = null;
+                }
+                applySettings({ composePrompt: composePrompt.trim() });
+              }}
+            />
+            <div className="compose-replay">
+              <button
+                type="button"
+                className="button compose-replay__button"
+                onClick={handleComposeReplay}
+                disabled={composeReplayDisabled}
+                title={composeReplayTitle}
+                aria-label="Compose from last recording"
+              >
+                <FiPenTool size={16} aria-hidden="true" focusable="false" />
+                Compose
+              </button>
+            </div>
             <div className="compose-status" aria-live="polite">
               {promptAvailabilityState === 'downloadable' && (
                 <p className="helper-text">Chrome is downloading the on-device model. Keep this tab open.</p>
               )}
               {promptAvailabilityMessage && <p className="helper-text">{promptAvailabilityMessage}</p>}
-              {composeError && <p className="helper-text compose-status__error">{composeError}</p>}
+              {composeError && <p className="helper-text danger compose-status__error">{composeError}</p>}
             </div>
           </section>
 
@@ -2076,30 +2877,31 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
                   <p className="history-item__subtitle">
                     {entry.createdAt} • {entry.actions.join(', ')}
                   </p>
-                  {entry.summary && (
-                    <p className="history-item__summary">
-                      <strong className="history-item__summary-label">Summary:</strong> {entry.summary}
-                    </p>
-                  )}
-                  {entry.rewrite && (
-                    <p className="history-item__summary">
-                      <strong className="history-item__summary-label">Rewrite:</strong> {entry.rewrite}
-                    </p>
-                  )}
-                  {entry.compose && (
-                    <p className="history-item__summary">
-                      <strong className="history-item__summary-label">
-                        Compose ({entry.compose.presetLabel}):
-                      </strong>{' '}
+                </div>
+                {entry.summary && (
+                  <div className="history-item__section">
+                    <span className="history-item__section-label">Summary</span>
+                    <div className="history-item__section-content">{entry.summary}</div>
+                  </div>
+                )}
+                {entry.rewrite && (
+                  <div className="history-item__section">
+                    <span className="history-item__section-label">Rewrite</span>
+                    <div className="history-item__section-content">{entry.rewrite}</div>
+                  </div>
+                )}
+                {entry.compose && (
+                  <div className="history-item__section">
+                    <span className="history-item__section-label">
+                      Compose • {entry.compose.presetLabel}
+                    </span>
+                    <div className="history-item__section-content">
                       {entry.compose.paragraphs && entry.compose.paragraphs.length > 0
                         ? joinParagraphs(entry.compose.paragraphs)
                         : entry.compose.output}
-                    </p>
-                  )}
-                </div>
-                <button type="button" className="button">
-                  Open
-                </button>
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
           </div>

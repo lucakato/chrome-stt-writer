@@ -1,8 +1,8 @@
-export type EkkoMode = 'transcribe' | 'compose';
+export type EchoMode = 'transcribe' | 'compose';
 
-export type EkkoSettings = {
+export type EchoSettings = {
   floatingWidgetEnabled: boolean;
-  mode: EkkoMode;
+  mode: EchoMode;
   composePrompt: string;
 };
 
@@ -10,13 +10,13 @@ const WIDGET_KEY = 'ekko:floatingWidgetEnabled';
 const MODE_KEY = 'ekko:mode';
 const PROMPT_KEY = 'ekko:composePrompt';
 
-export const DEFAULT_SETTINGS: EkkoSettings = {
+export const DEFAULT_SETTINGS: EchoSettings = {
   floatingWidgetEnabled: true,
   mode: 'transcribe',
   composePrompt: ''
 };
 
-export async function getEkkoSettings(): Promise<EkkoSettings> {
+export async function getEchoSettings(): Promise<EchoSettings> {
   const [widget, mode, prompt] = await Promise.all([
     chrome.storage.local.get(WIDGET_KEY),
     chrome.storage.local.get(MODE_KEY),
@@ -35,7 +35,7 @@ export async function getEkkoSettings(): Promise<EkkoSettings> {
   };
 }
 
-export async function setEkkoSettings(partial: Partial<EkkoSettings>): Promise<EkkoSettings> {
+export async function setEchoSettings(partial: Partial<EchoSettings>): Promise<EchoSettings> {
   const tasks: Promise<unknown>[] = [];
 
   if (partial.floatingWidgetEnabled !== undefined) {
@@ -52,18 +52,18 @@ export async function setEkkoSettings(partial: Partial<EkkoSettings>): Promise<E
 
   await Promise.all(tasks);
 
-  return getEkkoSettings();
+  return getEchoSettings();
 }
 
-export type EkkoSettingsChange = Partial<Record<keyof EkkoSettings, boolean>>;
+export type EchoSettingsChange = Partial<Record<keyof EchoSettings, boolean>>;
 
-export function observeEkkoSettings(callback: (settings: EkkoSettings, changed: EkkoSettingsChange) => void): () => void {
+export function observeEchoSettings(callback: (settings: EchoSettings, changed: EchoSettingsChange) => void): () => void {
   const listener = (changes: { [key: string]: chrome.storage.StorageChange }, areaName: 'local' | 'sync' | 'managed') => {
     if (areaName !== 'local') {
       return;
     }
 
-    const changed: EkkoSettingsChange = {};
+    const changed: EchoSettingsChange = {};
 
     if (WIDGET_KEY in changes) {
       changed.floatingWidgetEnabled = true;
@@ -78,7 +78,7 @@ export function observeEkkoSettings(callback: (settings: EkkoSettings, changed: 
     }
 
     if (changed.floatingWidgetEnabled || changed.mode || changed.composePrompt) {
-      void getEkkoSettings()
+      void getEchoSettings()
         .then((value) => callback(value, changed))
         .catch(() => {
           /* ignore */

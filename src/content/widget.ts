@@ -4,16 +4,18 @@ import type { IconType } from 'react-icons';
 import { MdKeyboardVoice } from 'react-icons/md';
 import { RiVoiceprintFill } from 'react-icons/ri';
 import { IoSettingsSharp } from 'react-icons/io5';
-import { FiCopy, FiCornerDownRight } from 'react-icons/fi';
-import type { EkkoMessage, EkkoResponse } from '@shared/messages';
+import { FiCopy, FiCornerDownRight, FiRotateCcw, FiPenTool } from 'react-icons/fi';
+import { HiSparkles } from 'react-icons/hi';
+import { FaWandMagicSparkles } from 'react-icons/fa6';
+import type { EchoMessage, EchoResponse } from '@shared/messages';
 import {
-  getEkkoSettings,
-  observeEkkoSettings,
-  setEkkoSettings,
+  getEchoSettings,
+  observeEchoSettings,
+  setEchoSettings,
   DEFAULT_SETTINGS,
-  type EkkoSettings,
-  type EkkoMode,
-  type EkkoSettingsChange
+  type EchoSettings,
+  type EchoMode,
+  type EchoSettingsChange
 } from '@shared/settings';
 import { composeFromAudio, composeFromText, TRANSCRIBE_STRUCTURED_SYSTEM_PROMPT } from '@shared/ai/prompt';
 import { rewriteText } from '@shared/ai/rewriter';
@@ -28,7 +30,7 @@ import {
 } from '@shared/compose';
 
 const WIDGET_DEFAULT_COMPOSE_PROMPT =
-  'You are Ekko, an on-device assistant. Listen carefully and give a direct, helpful answer that the user can use immediately. Reply in the user’s language, stay concise, and do not add meta commentary or extra instructions.';
+  'You are Echo, an on-device assistant. The user will dictate instructions for the message they need. Transform those instructions into the finished text, written from the user’s perspective. If a recipient is mentioned, address that person directly. Include any requested structure (for example bullet lists or counts) inside the message. Do not repeat or reference the instructions, do not explain what you are doing, and never add guidance or meta commentary—return only the final deliverable the user can send immediately.';
 
 function iconMarkup(icon: IconType): string {
   return renderToStaticMarkup(
@@ -45,6 +47,10 @@ const ICON_MIC_RECORDING = iconMarkup(RiVoiceprintFill);
 const ICON_SETTINGS = iconMarkup(IoSettingsSharp);
 const ICON_COPY = iconMarkup(FiCopy);
 const ICON_INSERT = iconMarkup(FiCornerDownRight);
+const ICON_RESTART = iconMarkup(FiRotateCcw);
+const ICON_COMPOSE = iconMarkup(FiPenTool);
+const ICON_REFINE = iconMarkup(HiSparkles);
+const ICON_POLISH = iconMarkup(FaWandMagicSparkles);
 const ICON_MIC_PROCESSING = '<span aria-hidden="true">⏳</span>';
 const WIDGET_COMPOSE_MAX_DURATION_MS = 90_000;
 const TEMP_DIRECT_INSERT_DELAY_MS = 150;
@@ -55,7 +61,7 @@ type WidgetRewritePreset =
   | 'casual'
   | 'bullet'
   | 'action-items'
-  | 'custom';
+  | 'shorten';
 
 type WidgetRewriteConfig = {
   sharedContext?: string;
@@ -124,11 +130,12 @@ const WIDGET_REWRITE_OPTIONS: Array<{
     }
   },
   {
-    id: 'custom',
-    label: 'Custom instructions',
+    id: 'shorten',
+    label: 'Shorten',
     config: {
       sharedContext: WIDGET_BASE_SHARED_CONTEXT,
-      context: 'Rewrite the text to improve clarity, flow, and readability while preserving the author’s intent.',
+      context: 'Rewrite the text so it is significantly shorter while preserving key information and readability.',
+      length: 'shorter',
       format: 'plain-text'
     }
   }
@@ -147,6 +154,7 @@ const WIDGET_REFINE_CONTEXT =
   'Polish the text by fixing grammar mistakes, removing redundant or filler wording, and keeping the tone natural.';
 
 type RecordingState = 'idle' | 'recording' | 'processing';
+type StatusTone = 'muted' | 'danger';
 
 declare global {
   interface Window {
@@ -159,7 +167,7 @@ if (window.top !== window.self) {
 } else if (!window.__ekkoWidgetInjected__) {
   window.__ekkoWidgetInjected__ = true;
 
-  let settings: EkkoSettings = DEFAULT_SETTINGS;
+  let settings: EchoSettings = DEFAULT_SETTINGS;
   let recorderState: RecordingState = 'idle';
   let recognition: SpeechRecognition | null = null;
   let recognitionTimer: number | null = null;
@@ -187,6 +195,11 @@ if (window.top !== window.self) {
   let composeOutputText: HTMLParagraphElement | null = null;
   let composeOutputValue: ComposeDraftResult | null = null;
   let composeOutputMessage: string | null = null;
+  let composeTranscriptCard: HTMLDivElement | null = null;
+  let composeTranscriptScroll: HTMLDivElement | null = null;
+  let composeTranscriptPlaceholder: HTMLParagraphElement | null = null;
+  let composeTranscriptTextarea: HTMLTextAreaElement | null = null;
+  let composeTranscriptValue = '';
   let transcribeActionsRow: HTMLDivElement | null = null;
   let refineButton: HTMLButtonElement | null = null;
   let polishButton: HTMLButtonElement | null = null;
@@ -198,11 +211,17 @@ if (window.top !== window.self) {
   let rewritePreset: WidgetRewritePreset = 'concise-formal';
   let transcribeOutputKind: 'raw' | 'refine' | 'polish' | 'other' = 'raw';
   let insertBusy = false;
+  let composeAbortRequested = false;
+  let composeRestartPending = false;
+  let composeRecognition: SpeechRecognition | null = null;
+  let composeTranscriptInterim = '';
+  let composeTranscriptFinal = '';
 
   let root: HTMLDivElement | null = null;
   let triggerButton: HTMLButtonElement | null = null;
   let popup: HTMLDivElement | null = null;
   let micButton: HTMLButtonElement | null = null;
+  let restartButton: HTMLButtonElement | null = null;
   let settingsButton: HTMLButtonElement | null = null;
   let regenerateButton: HTMLButtonElement | null = null;
   let promptTextarea: HTMLTextAreaElement | null = null;
@@ -319,7 +338,26 @@ if (window.top !== window.self) {
         gap: 8px;
         margin-top: 12px;
       }
-      .ekko-popup__status,
+      .ekko-popup__status {
+        font-size: 0.75rem;
+        color: #4c4c70;
+        flex: 1;
+        display: none;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+        min-height: 1.2rem;
+      }
+      .ekko-popup__status--pill {
+        padding: 4px 10px;
+        border-radius: 999px;
+        font-weight: 600;
+      }
+      .ekko-popup__status--danger {
+        background: rgba(192, 54, 44, 0.15);
+        border: 1px solid rgba(192, 54, 44, 0.25);
+        color: #651b1b;
+      }
       .ekko-popup__timer {
         font-size: 0.75rem;
         color: #4c4c70;
@@ -402,7 +440,7 @@ if (window.top !== window.self) {
         cursor: pointer;
         margin-left: auto;
       }
-      .ekko-transcribe-actions {
+            .ekko-transcribe-actions {
         display: none;
         flex-direction: column;
         align-items: flex-start;
@@ -425,6 +463,9 @@ if (window.top !== window.self) {
         cursor: pointer;
         font-size: 0.82rem;
         transition: background 0.2s ease;
+      }
+      .ekko-transcribe-actions__button-icon {
+        display: inline-flex;
       }
       .ekko-transcribe-actions__button:disabled {
         cursor: not-allowed;
@@ -505,7 +546,7 @@ if (window.top !== window.self) {
     }
   }
 
-  function handleDirectInsertToggleMessage(message: EkkoMessage) {
+  function handleDirectInsertToggleMessage(message: EchoMessage) {
     if (message.type === 'ekko/direct-insert/toggle') {
       const enabled = !!(message.payload as { enabled?: boolean }).enabled;
       if (tempDirectInsertDepth === 0) {
@@ -525,7 +566,7 @@ if (window.top !== window.self) {
 
   async function queryDirectInsertState() {
     try {
-      const response = (await chrome.runtime.sendMessage({ type: 'ekko/direct-insert/query' } satisfies EkkoMessage)) as EkkoResponse | undefined;
+      const response = (await chrome.runtime.sendMessage({ type: 'ekko/direct-insert/query' } satisfies EchoMessage)) as EchoResponse | undefined;
       if (response && response.ok && response.data && typeof response.data === 'object') {
         const enabled = !!(response.data as { enabled?: boolean }).enabled;
         setDirectInsertState(enabled);
@@ -537,7 +578,7 @@ if (window.top !== window.self) {
 
   async function composeWidgetAudio(audioBuffer: ArrayBuffer): Promise<ComposeDraftResult> {
     const instruction = settings.composePrompt.trim();
-    console.info('[Ekko] widget instruction:', instruction);
+    console.info('[Echo] widget instruction:', instruction);
   const outputLanguage = resolveOutputLanguage();
     let lastDraft: ComposeDraftResult | null = null;
     const systemPrompt = instruction
@@ -563,11 +604,51 @@ if (window.top !== window.self) {
 
     const normalized = normalizeComposeDraftResult(draft);
 
-    if (!normalized.content && lastDraft) {
+    const normalize = (value: string) => value.toLowerCase().replace(/\s+/g, ' ').trim();
+    const spokenInstructions = composeTranscriptFinal.trim();
+    const resultLooksLikeInstructions = () => {
+      if (!spokenInstructions) return false;
+      const normalizedResult = normalize(normalized.content);
+      const normalizedInstructions = normalize(spokenInstructions);
+      if (!normalizedResult || !normalizedInstructions) return false;
+      if (normalizedResult === normalizedInstructions) return true;
+      if (
+        normalizedResult.length <= normalizedInstructions.length + 20 &&
+        normalizedResult.includes(normalizedInstructions)
+      ) {
+        return true;
+      }
+      const instructionPhrases = ['i want you', 'can you', 'please', 'i need you'];
+      if (
+        instructionPhrases.some((phrase) => normalizedResult.startsWith(phrase)) &&
+        normalizedInstructions.length >= normalizedResult.length - 15
+      ) {
+        return true;
+      }
+      return false;
+    };
+
+    let finalDraft = normalized;
+
+    if (resultLooksLikeInstructions()) {
+      try {
+        const textCompose = await composeFromText({
+          text: spokenInstructions,
+          systemPrompt,
+          instruction: instruction ? instruction : undefined,
+          outputLanguage
+        });
+        finalDraft = normalizeComposeDraftResult(textCompose);
+      } catch (fallbackError) {
+        console.warn('Widget compose text fallback failed', fallbackError);
+      }
+    }
+
+    if (!finalDraft.content && lastDraft) {
       return normalizeComposeDraftResult(lastDraft);
     }
 
-    return normalized;
+    return finalDraft;
   }
 
   async function insertComposeDraft(draft: ComposeDraftResult) {
@@ -581,7 +662,7 @@ if (window.top !== window.self) {
             paragraphs: draft.paragraphs
           }
         }
-      } satisfies EkkoMessage)
+      } satisfies EchoMessage)
       .catch((error) => {
         console.warn('Unable to insert compose output', error);
         throw error;
@@ -636,7 +717,7 @@ if (window.top !== window.self) {
       .sendMessage({
         type: 'ekko/direct-insert/apply',
         payload
-      } satisfies EkkoMessage)
+      } satisfies EchoMessage)
       .catch((error) => {
         console.warn('Unable to insert transcript output', error);
         throw error;
@@ -651,11 +732,9 @@ if (window.top !== window.self) {
   async function handleInsertTranscript() {
     const text = transcribeOutputValue.trim();
     if (!text) {
-      setStatus('Nothing to insert yet.');
+      setStatus('Nothing to insert yet.', 'danger');
       return;
     }
-
-    const skipStructuring = transcribeOutputKind !== 'raw';
 
     if (insertBusy) {
       return;
@@ -669,10 +748,7 @@ if (window.top !== window.self) {
         directInsertEnabled ? 'Inserting into page…' : 'Temporarily enabling Direct Insert Mode…'
       );
       await runWithDirectInsertBridge(() =>
-        insertTranscriptText(
-          text,
-          skipStructuring ? { skipStructuring: true } : { forceStructure: true }
-        )
+        insertTranscriptText(text, { forceStructure: true })
       );
       setStatus('Draft inserted into page.');
     } catch (error) {
@@ -681,7 +757,7 @@ if (window.top !== window.self) {
       if (copied) {
         setStatus('Copied to clipboard instead.');
       } else {
-        setStatus(error instanceof Error ? error.message : 'Unable to insert transcript.');
+        setStatus(error instanceof Error ? error.message : 'Unable to insert transcript.', 'danger');
       }
     } finally {
       insertBusy = false;
@@ -706,7 +782,7 @@ if (window.top !== window.self) {
     if (!draft || !draft.content.trim()) {
       setComposeOutput(null);
       setComposeOutput('Compose returned no response.');
-      setStatus('Compose returned no response.');
+      setStatus('Compose returned no response.', 'danger');
       return false;
     }
 
@@ -729,7 +805,7 @@ if (window.top !== window.self) {
       }
       const message = error instanceof Error ? error.message : 'Compose failed.';
       setComposeOutput(message);
-      setStatus(message);
+      setStatus(message, 'danger');
       return false;
     }
   }
@@ -740,7 +816,7 @@ if (window.top !== window.self) {
     triggerButton.id = 'ekko-floating-widget-trigger';
     triggerButton.type = 'button';
     triggerButton.innerHTML = '<span aria-hidden="true">🗨️</span>';
-    triggerButton.title = 'Ekko';
+    triggerButton.title = 'Echo';
     triggerButton.addEventListener('click', () => {
       popupOpen = !popupOpen;
       popup?.classList.toggle('ekko-popup--open', popupOpen);
@@ -758,7 +834,7 @@ if (window.top !== window.self) {
 
     const title = document.createElement('span');
     title.className = 'ekko-popup__title';
-    title.textContent = 'Ekko';
+    title.textContent = 'Echo';
 
     const close = document.createElement('button');
     close.className = 'ekko-popup__close';
@@ -816,13 +892,34 @@ if (window.top !== window.self) {
     promptTextarea.addEventListener('input', (event) => {
       const value = (event.target as HTMLTextAreaElement).value;
       settings = { ...settings, composePrompt: value };
-      setEkkoSettings({ composePrompt: value }).catch((error) =>
+      setEchoSettings({ composePrompt: value }).catch((error) =>
         console.warn('Unable to update prompt', error)
       );
     });
 
     composeOutputCard = document.createElement('div');
     composeOutputCard.className = 'ekko-output';
+
+    composeTranscriptCard = document.createElement('div');
+    composeTranscriptCard.className = 'ekko-output';
+    composeTranscriptScroll = document.createElement('div');
+    composeTranscriptScroll.className = 'ekko-output__scroll';
+    composeTranscriptScroll.style.display = 'none';
+    composeTranscriptTextarea = document.createElement('textarea');
+    composeTranscriptTextarea.className = 'ekko-output__textarea';
+    composeTranscriptTextarea.placeholder = 'Your transcript will appear here.';
+    composeTranscriptTextarea.addEventListener('input', (event) => {
+      const value = (event.target as HTMLTextAreaElement).value;
+      composeTranscriptFinal = value;
+      composeTranscriptInterim = '';
+      composeTranscriptValue = value;
+    });
+    composeTranscriptScroll.appendChild(composeTranscriptTextarea);
+    composeTranscriptPlaceholder = document.createElement('p');
+    composeTranscriptPlaceholder.className = 'ekko-output__placeholder';
+    composeTranscriptPlaceholder.textContent = 'Your transcript will appear here.';
+    composeTranscriptCard.appendChild(composeTranscriptScroll);
+    composeTranscriptCard.appendChild(composeTranscriptPlaceholder);
 
     composeOutputScroll = document.createElement('div');
     composeOutputScroll.className = 'ekko-output__scroll';
@@ -860,6 +957,13 @@ if (window.top !== window.self) {
     micButton.innerHTML = ICON_MIC_IDLE;
     micButton.addEventListener('click', handleMicClick);
 
+    restartButton = document.createElement('button');
+    restartButton.className = 'ekko-icon-button';
+    restartButton.type = 'button';
+    restartButton.title = 'Restart recording';
+    restartButton.innerHTML = ICON_RESTART;
+    restartButton.addEventListener('click', handleRestartClick);
+
     settingsButton = document.createElement('button');
     settingsButton.className = 'ekko-icon-button';
     settingsButton.type = 'button';
@@ -876,7 +980,7 @@ if (window.top !== window.self) {
                 .catch(() => undefined)
             : undefined;
 
-        const response = await chrome.runtime.sendMessage<EkkoMessage, EkkoResponse>({
+        const response = await chrome.runtime.sendMessage<EchoMessage, EchoResponse>({
           type: 'ekko/sidepanel/open',
           payload: { action: 'toggle', windowId: payloadWindowId ?? undefined }
         });
@@ -902,12 +1006,13 @@ if (window.top !== window.self) {
           setStatus('Settings opened in side panel.');
         }
       } catch (error) {
-        console.warn('Unable to open Ekko side panel from widget', error);
-        setStatus('Unable to open settings.');
+        console.warn('Unable to open Echo side panel from widget', error);
+        setStatus('Unable to open settings.', 'danger');
       }
     });
 
     controlsRow.appendChild(micButton);
+    controlsRow.appendChild(restartButton);
     controlsRow.appendChild(settingsButton);
 
     transcribeActionsRow = document.createElement('div');
@@ -916,7 +1021,7 @@ if (window.top !== window.self) {
     refineButton = document.createElement('button');
     refineButton.type = 'button';
     refineButton.className = 'ekko-transcribe-actions__button';
-    refineButton.textContent = 'Refine';
+    refineButton.innerHTML = `<span class="ekko-transcribe-actions__button-icon">${ICON_REFINE}</span><span>Refine</span>`;
     refineButton.addEventListener('click', handleRefineClick);
 
     rewriteSelect = document.createElement('select');
@@ -936,7 +1041,7 @@ if (window.top !== window.self) {
     polishButton = document.createElement('button');
     polishButton.type = 'button';
     polishButton.className = 'ekko-transcribe-actions__button';
-    polishButton.textContent = 'Polish';
+    polishButton.innerHTML = `<span class="ekko-transcribe-actions__button-icon">${ICON_POLISH}</span><span>Polish</span>`;
     polishButton.addEventListener('click', handlePolishClick);
 
     copyButton = document.createElement('button');
@@ -966,7 +1071,7 @@ if (window.top !== window.self) {
     regenerateButton = document.createElement('button');
     regenerateButton.type = 'button';
     regenerateButton.className = 'ekko-popup__regen';
-    regenerateButton.textContent = 'Re-generate';
+    regenerateButton.innerHTML = `${ICON_COMPOSE}<span>Compose</span>`;
     regenerateButton.addEventListener('click', handleRegenerate);
 
     footer.appendChild(statusLabel);
@@ -976,6 +1081,7 @@ if (window.top !== window.self) {
     body.appendChild(controlsRow);
     body.appendChild(transcribeOutputCard);
     body.appendChild(transcribeActionsRow);
+    body.appendChild(composeTranscriptCard);
     body.appendChild(promptTextarea);
     body.appendChild(composeOutputCard);
     body.appendChild(footer);
@@ -985,6 +1091,7 @@ if (window.top !== window.self) {
     root?.appendChild(popup);
     updateTranscribeOutputVisibility();
     updateComposeOutputVisibility();
+    updateComposeTranscriptVisibility();
     updateTranscribeActionsVisibility();
     updateActionButtonStates();
   }
@@ -1010,15 +1117,18 @@ if (window.top !== window.self) {
     }
     updateTranscribeOutputVisibility();
     updateComposeOutputVisibility();
+    updateComposeTranscriptVisibility();
+    updateMicUi();
   }
 
   function updateMicUi() {
     if (!micButton) return;
+    const composeMode = settings.mode === 'compose';
     if (recorderState === 'recording') {
       micButton.classList.add('ekko-icon-button--active');
       micButton.classList.add('ekko-icon-button--recording');
       micButton.innerHTML = ICON_MIC_RECORDING;
-      micButton.title = 'Stop recording';
+      micButton.title = composeMode ? 'Stop capture' : 'Stop recording';
     } else if (recorderState === 'processing') {
       micButton.classList.add('ekko-icon-button--active');
       micButton.classList.remove('ekko-icon-button--recording');
@@ -1028,18 +1138,41 @@ if (window.top !== window.self) {
       micButton.classList.remove('ekko-icon-button--active');
       micButton.classList.remove('ekko-icon-button--recording');
       micButton.innerHTML = ICON_MIC_IDLE;
-      micButton.title = 'Start recording';
+      micButton.title = composeMode ? 'Start capture' : 'Start recording';
+    }
+    if (restartButton) {
+      const restartDisabled = recorderState === 'processing';
+      restartButton.disabled = restartDisabled;
+      let restartTitle = composeMode ? 'Restart capture' : 'Restart recording';
+      if (restartDisabled) {
+        restartTitle = composeMode ? 'Capture is processing…' : 'Recording is processing…';
+      }
+      restartButton.title = restartTitle;
     }
     updateActionButtonStates();
   }
 
-  function setStatus(text: string) {
-    if (statusLabel) {
-      if (settings.mode === 'compose' || settings.mode === 'transcribe') {
-        statusLabel.textContent = '';
-      } else {
-        statusLabel.textContent = text;
-      }
+  function setStatus(text: string, tone: StatusTone = 'muted') {
+    if (!statusLabel) {
+      return;
+    }
+    const trimmed = text.trim();
+    const isError = tone === 'danger';
+    const shouldShow = trimmed.length > 0;
+
+    statusLabel.classList.remove('ekko-popup__status--pill', 'ekko-popup__status--danger');
+
+    if (!shouldShow) {
+      statusLabel.textContent = '';
+      statusLabel.style.display = 'none';
+      return;
+    }
+
+    statusLabel.textContent = trimmed;
+    statusLabel.style.display = 'flex';
+
+    if (isError) {
+      statusLabel.classList.add('ekko-popup__status--pill', 'ekko-popup__status--danger');
     }
   }
 
@@ -1080,7 +1213,7 @@ if (window.top !== window.self) {
       .sendMessage({
         type: 'ekko/direct-insert/toggle',
         payload: { enabled }
-      } satisfies EkkoMessage)
+      } satisfies EchoMessage)
       .catch((error) => {
         console.warn('Unable to toggle direct insert bridge', error);
         rollbackDepth();
@@ -1215,6 +1348,32 @@ if (window.top !== window.self) {
     updateComposeOutputVisibility();
   }
 
+  function setComposeTranscript(text: string | null) {
+    composeTranscriptValue = text && text.trim() ? text.trim() : '';
+    if (composeTranscriptTextarea) {
+      const current = composeTranscriptTextarea.value;
+      if (current !== composeTranscriptValue) {
+        composeTranscriptTextarea.value = composeTranscriptValue;
+      }
+    }
+    if (composeTranscriptScroll) {
+      composeTranscriptScroll.style.display = composeTranscriptValue ? 'block' : 'none';
+    }
+    if (composeTranscriptPlaceholder) {
+      composeTranscriptPlaceholder.style.display = composeTranscriptValue ? 'none' : 'block';
+    }
+  }
+
+  function updateComposeTranscriptVisibility() {
+    if (!composeTranscriptCard) return;
+    const visible = settings.mode === 'compose';
+    composeTranscriptCard.style.display = visible ? 'flex' : 'none';
+    if (!visible) return;
+    if (!composeTranscriptValue && composeTranscriptPlaceholder) {
+      composeTranscriptPlaceholder.style.display = 'block';
+    }
+  }
+
   function updateTranscribeOutputVisibility() {
     if (!transcribeOutputCard) return;
     const visible = settings.mode === 'transcribe';
@@ -1231,6 +1390,14 @@ if (window.top !== window.self) {
       transcribeOutputText.textContent = transcribeOutputValue;
     }
     updateTranscribeActionsVisibility();
+  }
+
+  function updateComposeTranscriptDisplay() {
+    const finalText = composeTranscriptFinal;
+    const interimText = composeTranscriptInterim.trim();
+    const needsSpace = finalText && !/[\s\n]$/.test(finalText) ? ' ' : '';
+    const combined = interimText ? `${finalText}${needsSpace}${interimText}` : finalText;
+    setComposeTranscript(combined ?? '');
   }
 
   function setTranscribeOutput(
@@ -1261,17 +1428,109 @@ if (window.top !== window.self) {
     }
   }
 
+  function startComposeRecognition() {
+    const SpeechRecognitionCtor =
+      (window as typeof window & {
+        webkitSpeechRecognition?: typeof SpeechRecognition;
+      }).SpeechRecognition ||
+      (window as typeof window & {
+        webkitSpeechRecognition?: typeof SpeechRecognition;
+      }).webkitSpeechRecognition;
+
+    if (!SpeechRecognitionCtor) {
+      return;
+    }
+
+    composeRecognition?.stop();
+    composeTranscriptFinal = '';
+    composeTranscriptInterim = '';
+    setComposeTranscript(null);
+
+    composeRecognition = new SpeechRecognitionCtor();
+    composeRecognition.lang = navigator.language ?? 'en-US';
+    composeRecognition.continuous = true;
+    composeRecognition.interimResults = true;
+    composeRecognition.maxAlternatives = 1;
+
+    composeRecognition.onresult = (event) => {
+      composeTranscriptInterim = '';
+      for (let i = event.resultIndex; i < event.results.length; i += 1) {
+        const result = event.results[i];
+        const transcript = result[0]?.transcript ?? '';
+        if (!transcript) continue;
+        if (result.isFinal) {
+          composeTranscriptFinal = `${composeTranscriptFinal}${composeTranscriptFinal ? ' ' : ''}${transcript.trim()}`;
+        } else {
+          composeTranscriptInterim += transcript;
+        }
+      }
+      updateComposeTranscriptDisplay();
+    };
+
+    composeRecognition.onerror = (event) => {
+      if (event.error !== 'aborted') {
+        console.warn('Compose speech recognition error', event);
+      }
+    };
+
+    composeRecognition.onend = () => {
+      if (composeTranscriptInterim.trim()) {
+        composeTranscriptFinal = composeTranscriptFinal
+          ? `${composeTranscriptFinal} ${composeTranscriptInterim.trim()}`
+          : composeTranscriptInterim.trim();
+        composeTranscriptInterim = '';
+      }
+      updateComposeTranscriptDisplay();
+    };
+
+    try {
+      composeRecognition.start();
+    } catch (error) {
+      console.warn('Unable to start compose speech recognition', error);
+      composeRecognition = null;
+    }
+  }
+
+  function stopComposeRecognition() {
+    if (composeRecognition) {
+      try {
+        composeRecognition.stop();
+      } catch (error) {
+        console.warn('Unable to stop compose speech recognition', error);
+      }
+      if (composeTranscriptInterim.trim()) {
+        composeTranscriptFinal = composeTranscriptFinal
+          ? `${composeTranscriptFinal} ${composeTranscriptInterim.trim()}`
+          : composeTranscriptInterim.trim();
+        composeTranscriptInterim = '';
+      }
+      updateComposeTranscriptDisplay();
+      composeRecognition.onresult = null;
+      composeRecognition.onerror = null;
+      composeRecognition.onend = null;
+    }
+    composeRecognition = null;
+  }
+
   function updateActionButtonStates() {
     const hasTranscript = !!transcribeOutputValue && recorderState === 'idle';
 
     if (refineButton) {
       refineButton.disabled = !hasTranscript || refineBusy;
-      refineButton.textContent = refineBusy ? 'Refining…' : 'Refine';
+      if (refineBusy) {
+        refineButton.textContent = 'Refining…';
+      } else {
+        refineButton.innerHTML = `<span class="ekko-transcribe-actions__button-icon">${ICON_REFINE}</span><span>Refine</span>`;
+      }
     }
 
     if (polishButton) {
       polishButton.disabled = !hasTranscript || rewriterBusy;
-      polishButton.textContent = rewriterBusy ? 'Polishing…' : 'Polish';
+      if (rewriterBusy) {
+        polishButton.textContent = 'Polishing…';
+      } else {
+        polishButton.innerHTML = `<span class="ekko-transcribe-actions__button-icon">${ICON_POLISH}</span><span>Polish</span>`;
+      }
     }
 
     if (rewriteSelect) {
@@ -1334,11 +1593,11 @@ if (window.top !== window.self) {
     }
   }
 
-  function switchMode(mode: EkkoMode) {
+  function switchMode(mode: EchoMode) {
     if (settings.mode === mode) return;
     settings = { ...settings, mode };
     updateModeUi();
-    setEkkoSettings({ mode }).catch((error) => console.warn('Unable to switch mode', error));
+    setEchoSettings({ mode }).catch((error) => console.warn('Unable to switch mode', error));
     if (recorderState === 'recording') {
       stopRecording();
     }
@@ -1393,7 +1652,7 @@ if (window.top !== window.self) {
       if (finalText && finalText !== lastLoggedWidgetTranscript) {
         const confidenceOutput =
           typeof lastConfidence === 'number' ? Number(lastConfidence.toFixed(3)) : undefined;
-        console.info('[Ekko] Widget speech recognition final result', {
+        console.info('[Echo] Widget speech recognition final result', {
           transcript: finalText,
           confidence: confidenceOutput
         });
@@ -1403,7 +1662,7 @@ if (window.top !== window.self) {
 
     recognition.onerror = (event) => {
       if (event.error !== 'aborted') {
-        setStatus(event.message || `Speech recognition error: ${event.error}`);
+        setStatus(event.message || `Speech recognition error: ${event.error}`, 'danger');
       }
       stopTranscribe();
     };
@@ -1456,7 +1715,7 @@ if (window.top !== window.self) {
             if (copied) {
               setStatus('Copied to clipboard.');
             } else {
-              setStatus(error instanceof Error ? error.message : 'Unable to insert transcript.');
+              setStatus(error instanceof Error ? error.message : 'Unable to insert transcript.', 'danger');
             }
           })
           .finally(() => {
@@ -1504,12 +1763,15 @@ if (window.top !== window.self) {
     mediaRecorder = mimeType ? new MediaRecorder(mediaStream, { mimeType }) : new MediaRecorder(mediaStream);
     mimeType = mediaRecorder.mimeType || mimeType;
     try {
-      console.info('[Ekko] Widget compose recorder MIME', mimeType);
+      console.info('[Echo] Widget compose recorder MIME', mimeType);
     } catch {
       /* ignore */
     }
     hasComposeRecording = false;
     setComposeOutput(null);
+    composeTranscriptFinal = '';
+    composeTranscriptInterim = '';
+    setComposeTranscript(null);
 
     mediaRecorder.ondataavailable = (event) => {
       if (event.data && event.data.size > 0) {
@@ -1522,12 +1784,44 @@ if (window.top !== window.self) {
         window.clearInterval(composeTimer);
         composeTimer = null;
       }
-    composeStart = null;
-    setTimer(0);
-    recorderState = 'processing';
-    updateMicUi();
-    setComposeOutput('Generating…');
-    setStatus('Generating…');
+      composeStart = null;
+      setTimer(0);
+
+      const aborted = composeAbortRequested;
+      const shouldRestart = composeRestartPending;
+      composeAbortRequested = false;
+      composeRestartPending = false;
+
+      const cleanupStream = () => {
+        mediaStream?.getTracks().forEach((track) => track.stop());
+        mediaStream = null;
+        mediaRecorder = null;
+      };
+
+      stopComposeRecognition();
+
+      if (aborted) {
+        cleanupStream();
+        mediaChunks = [];
+        lastComposeAudio = null;
+        hasComposeRecording = false;
+        recorderState = 'idle';
+        updateMicUi();
+        setStatus('');
+        setComposeOutput(null);
+        if (shouldRestart) {
+          startCompose().catch((error) => {
+            console.warn('Unable to restart compose recording', error);
+            setStatus(error instanceof Error ? error.message : 'Unable to start recording.', 'danger');
+          });
+        }
+        return;
+      }
+
+      recorderState = 'processing';
+      updateMicUi();
+      setComposeOutput('Generating…');
+      setStatus('Generating…');
 
       try {
         const blobMime = mediaRecorder?.mimeType || mimeType || 'audio/webm';
@@ -1542,11 +1836,9 @@ if (window.top !== window.self) {
         }
       } catch (error) {
         console.warn('Compose failed', error);
-        setStatus(error instanceof Error ? error.message : 'Compose failed.');
+        setStatus(error instanceof Error ? error.message : 'Compose failed.', 'danger');
       } finally {
-        mediaStream?.getTracks().forEach((track) => track.stop());
-        mediaStream = null;
-        mediaRecorder = null;
+        cleanupStream();
         recorderState = 'idle';
         updateMicUi();
       }
@@ -1559,6 +1851,7 @@ if (window.top !== window.self) {
     setComposeOutput('Recording… 0:00');
     setStatus('');
     setTimer(0);
+    startComposeRecognition();
 
     if (composeLimitTimer) {
       window.clearTimeout(composeLimitTimer);
@@ -1585,14 +1878,26 @@ if (window.top !== window.self) {
     }, 200);
   }
 
-  function stopCompose() {
+  function stopCompose({ abort = false }: { abort?: boolean } = {}) {
+    if (abort) {
+      composeAbortRequested = true;
+    }
     if (mediaRecorder && mediaRecorder.state === 'recording') {
-      mediaRecorder.stop();
+      try {
+        mediaRecorder.stop();
+      } catch (error) {
+        console.warn('Unable to stop compose recorder', error);
+        if (abort) {
+          composeAbortRequested = false;
+          composeRestartPending = false;
+        }
+      }
     }
     if (composeLimitTimer) {
       window.clearTimeout(composeLimitTimer);
       composeLimitTimer = null;
     }
+    stopComposeRecognition();
   }
 
   function stopRecording() {
@@ -1601,6 +1906,93 @@ if (window.top !== window.self) {
     }
     if (recognition) {
       stopTranscribe();
+    }
+  }
+
+  function abortTranscribe() {
+    if (recognitionTimer) {
+      window.clearTimeout(recognitionTimer);
+      recognitionTimer = null;
+    }
+    if (recognition) {
+      recognition.onresult = null;
+      recognition.onerror = null;
+      recognition.onend = null;
+      try {
+        recognition.stop();
+      } catch (error) {
+        console.warn('Unable to stop speech recognition', error);
+      }
+      recognition = null;
+    }
+    transcribeFinal = '';
+    transcribeInterim = '';
+    lastLoggedWidgetTranscript = '';
+    setTranscribeOutput(null, 'raw');
+    recorderState = 'idle';
+    updateMicUi();
+    setStatus('');
+  }
+
+  function restartTranscribe() {
+    abortTranscribe();
+    startTranscribe().catch((error) => {
+      console.warn('Unable to restart transcription', error);
+      recorderState = 'idle';
+      updateMicUi();
+      setStatus(error instanceof Error ? error.message : 'Unable to start recording.', 'danger');
+    });
+  }
+
+  function restartCompose() {
+    if (recorderState === 'processing') {
+      return;
+    }
+    setComposeOutput(null);
+    setStatus('');
+    mediaChunks = [];
+    hasComposeRecording = false;
+    lastComposeAudio = null;
+    composeTranscriptFinal = '';
+    composeTranscriptInterim = '';
+    setComposeTranscript(null);
+    stopComposeRecognition();
+    if (composeTimer) {
+      window.clearInterval(composeTimer);
+      composeTimer = null;
+    }
+    if (composeLimitTimer) {
+      window.clearTimeout(composeLimitTimer);
+      composeLimitTimer = null;
+    }
+    setTimer(0);
+    mediaStream?.getTracks().forEach((track) => track.stop());
+    mediaStream = null;
+    if (mediaRecorder && mediaRecorder.state === 'recording') {
+      composeRestartPending = true;
+      stopCompose({ abort: true });
+      return;
+    }
+    composeRestartPending = false;
+    composeAbortRequested = false;
+    recorderState = 'idle';
+    updateMicUi();
+    startCompose().catch((error) => {
+      console.warn('Unable to start compose recording', error);
+      recorderState = 'idle';
+      updateMicUi();
+      setStatus(error instanceof Error ? error.message : 'Unable to start recording.', 'danger');
+    });
+  }
+
+  function handleRestartClick() {
+    if (recorderState === 'processing') {
+      return;
+    }
+    if (settings.mode === 'compose') {
+      restartCompose();
+    } else {
+      restartTranscribe();
     }
   }
 
@@ -1622,7 +2014,8 @@ if (window.top !== window.self) {
         console.warn('Unable to start compose recording', error);
         recorderState = 'idle';
         updateMicUi();
-        setStatus(error instanceof Error ? error.message : 'Unable to start recording.');
+        stopComposeRecognition();
+        setStatus(error instanceof Error ? error.message : 'Unable to start recording.', 'danger');
       });
     } else {
       startTranscribe()
@@ -1634,7 +2027,7 @@ if (window.top !== window.self) {
           console.warn('Unable to start transcription', error);
           recorderState = 'idle';
           updateMicUi();
-          setStatus(error instanceof Error ? error.message : 'Unable to start recording.');
+          setStatus(error instanceof Error ? error.message : 'Unable to start recording.', 'danger');
         });
     }
   }
@@ -1644,12 +2037,12 @@ if (window.top !== window.self) {
       return;
     }
     if (!hasComposeRecording) {
-      setStatus('Record first, then try re-generate.');
+      setStatus('Record first, then try re-generate.', 'danger');
       return;
     }
 
     if (!lastComposeAudio) {
-      setStatus('Record again before regenerating.');
+      setStatus('Record again before regenerating.', 'danger');
       return;
     }
     const audioBuffer = lastComposeAudio.slice(0);
@@ -1670,7 +2063,7 @@ if (window.top !== window.self) {
       }
     } catch (error) {
       console.warn('Compose regenerate failed', error);
-      setStatus(error instanceof Error ? error.message : 'Compose failed.');
+      setStatus(error instanceof Error ? error.message : 'Compose failed.', 'danger');
     } finally {
       recorderState = 'idle';
       updateMicUi();
@@ -1721,14 +2114,15 @@ if (window.top !== window.self) {
         } catch (insertError) {
           console.warn('Unable to insert refined text', insertError);
           const copied = await copyToClipboard(refined);
-          setStatus(copied ? 'Refined text copied to clipboard.' : 'Unable to insert refined text.');
+          const message = copied ? 'Refined text copied to clipboard.' : 'Unable to insert refined text.';
+          setStatus(message, copied ? 'muted' : 'danger');
         }
       } else {
         setStatus('Refined text ready.');
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Refine request failed.';
-      setStatus(message);
+      setStatus(message, 'danger');
       setTranscribeOutput(text, 'raw');
     } finally {
       refineBusy = false;
@@ -1782,7 +2176,8 @@ if (window.top !== window.self) {
         } catch (insertError) {
           console.warn('Unable to insert polished text', insertError);
           const copied = await copyToClipboard(polished);
-          setStatus(copied ? 'Polished text copied to clipboard.' : 'Unable to insert polished text.');
+          const message = copied ? 'Polished text copied to clipboard.' : 'Unable to insert polished text.';
+          setStatus(message, copied ? 'muted' : 'danger');
         }
       } else {
         setStatus(`Polished using ${preset.label}.`);
@@ -1792,7 +2187,7 @@ if (window.top !== window.self) {
       if (/enough space/i.test(message)) {
         message = 'Chrome needs about 22 GB of free space to download the Gemini Nano model.';
       }
-      setStatus(message);
+      setStatus(message, 'danger');
       setTranscribeOutput(text, 'raw');
     } finally {
       rewriterBusy = false;
@@ -1810,11 +2205,11 @@ if (window.top !== window.self) {
     if (copied) {
       setStatus('Copied to clipboard.');
     } else {
-      setStatus('Unable to copy text.');
+      setStatus('Unable to copy text.', 'danger');
     }
   }
 
-  function applySettingsChange(value: EkkoSettings, changed?: EkkoSettingsChange) {
+  function applySettingsChange(value: EchoSettings, changed?: EchoSettingsChange) {
     if (changed) {
       settings = {
         floatingWidgetEnabled: changed.floatingWidgetEnabled ? value.floatingWidgetEnabled : settings.floatingWidgetEnabled,
@@ -1828,14 +2223,14 @@ if (window.top !== window.self) {
   }
 
   function bootstrap() {
-    console.info('[Ekko] Floating widget bootstrap');
+    console.info('[Echo] Floating widget bootstrap');
     ensureWidget();
     void queryDirectInsertState();
-    chrome.runtime.onMessage.addListener((message: EkkoMessage) => {
+    chrome.runtime.onMessage.addListener((message: EchoMessage) => {
       handleDirectInsertToggleMessage(message);
       return false;
     });
-    getEkkoSettings()
+    getEchoSettings()
       .then((value) => {
         applySettingsChange(value);
         if (promptTextarea && (!document.activeElement || document.activeElement !== promptTextarea)) {
@@ -1843,10 +2238,10 @@ if (window.top !== window.self) {
         }
       })
       .catch((error) => {
-        console.warn('Unable to load Ekko settings', error);
+        console.warn('Unable to load Echo settings', error);
       });
 
-    observeEkkoSettings((value, changed) => {
+    observeEchoSettings((value, changed) => {
       applySettingsChange(value, changed);
     });
   }

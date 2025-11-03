@@ -7,7 +7,7 @@ export type DirectInsertPayload = {
 
 export type ComposeOutputPayload = ComposeDraftFields & { raw?: string };
 
-export type EkkoMessage =
+export type EchoMessage =
   | {
       type: 'ekko/direct-insert/toggle';
       payload: {
@@ -56,6 +56,10 @@ export type EkkoMessage =
       payload?: Record<string, never>;
     }
   | {
+      type: 'ekko/direct-insert/restore';
+      payload?: Record<string, never>;
+    }
+  | {
       type: 'ekko/direct-insert/query';
       payload?: Record<string, never>;
     }
@@ -85,7 +89,7 @@ export type EkkoMessage =
       payload: DirectInsertPayload;
     };
 
-export type EkkoResponse =
+export type EchoResponse =
   | {
       ok: true;
       data?: unknown;
