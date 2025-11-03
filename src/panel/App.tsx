@@ -48,13 +48,7 @@ function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-type RewritePreset =
-  | 'concise-formal'
-  | 'expand'
-  | 'casual'
-  | 'bullet'
-  | 'action-items'
-  | 'shorten';
+type RewritePreset = 'concise-formal' | 'expand' | 'casual' | 'bullet' | 'shorten';
 
 type MicVisualState = 'idle' | 'recording' | 'off';
 
@@ -66,14 +60,10 @@ function MicIcon({ state }: { state: MicVisualState }) {
 
 type ComposePresetId =
   | 'freeform'
-  | 'email-formal'
-  | 'summary'
-  | 'action-plan'
   | 'concise-formal'
   | 'expand'
   | 'casual'
   | 'bullet'
-  | 'action-items'
   | 'shorten';
 
 type HistoryEntry = {
@@ -107,11 +97,10 @@ const BASE_SHARED_CONTEXT =
 const COMPOSE_MAX_DURATION_MS = 90_000;
 
 const rewritePresets: Array<{ id: RewritePreset; label: string }> = [
-  { id: 'concise-formal', label: 'Concise • Formal' },
+  { id: 'concise-formal', label: 'Formalize' },
   { id: 'expand', label: 'Expand' },
   { id: 'casual', label: 'Casual' },
   { id: 'bullet', label: 'Bullet list' },
-  { id: 'action-items', label: 'Action items' },
   { id: 'shorten', label: 'Shorten' }
 ];
 
@@ -120,98 +109,73 @@ const composePresets: Array<{ id: ComposePresetId; label: string; systemPrompt: 
     id: 'freeform',
     label: 'Freeform',
     systemPrompt:
-      'You are Echo, an on-device writing assistant. The user will dictate instructions about the message they need. Transform those instructions into the finished text, written from the user’s perspective. If the user mentions a recipient, address that person directly. Include any requested structure (such as lists or bullet points) inside the message. Never mention the instructions, never explain what you are doing, and do not add guidance or meta commentary—return only the final deliverable the user can send immediately.'
-  },
-  {
-    id: 'email-formal',
-    label: 'Formal email',
-    systemPrompt:
-      'You help users draft formal, polite emails. Produce the finished email text (include a subject line and sign-off when appropriate). Provide only the email—do not add guidance or commentary.'
-  },
-  {
-    id: 'summary',
-    label: 'Summary',
-    systemPrompt:
-      'You summarize the user’s spoken input into a concise digest. Present only the distilled summary in clear prose or bullet points, without extra advice or explanation.'
-  },
-  {
-    id: 'action-plan',
-    label: 'Action plan',
-    systemPrompt:
-      'You produce a clear action plan based on the user’s spoken intent. Return only the actionable steps (numbered or bullet list), keeping each step direct and free of meta commentary.'
+      'You are Echo, an on-device writing assistant. The user will dictate instructions about the message they need. Transform those instructions into the finished text, written from the user’s perspective and preserving their voice. Mirror any specified tone, address the mentioned recipient directly, and include requested structure (such as lists or bullet points) inside the message. Never mention the instructions, explain what you are doing, or add guidance—return only the final deliverable the user can send immediately.'
   },
   {
     id: 'concise-formal',
-    label: 'Concise • Formal',
+    label: 'Formalize',
     systemPrompt:
-      'You craft concise, professional messages suitable for business communication. Transform the user’s instructions into a polished response addressed to the intended recipient. Use a clear subject when appropriate, stay courteous, and omit any meta commentary or explanations.'
+      'You formalize the user’s instructions into a polished, professional message while preserving their voice and intent. Maintain the user’s first-person perspective, address the intended recipient directly, tighten the structure, and ensure the tone is refined and respectful. Provide only the final deliverable—no meta commentary, guidance, or discussion of the instructions.'
   },
   {
     id: 'expand',
     label: 'Expand',
     systemPrompt:
-      'You elaborate on the user’s instructions to produce a fuller, more detailed response. Provide helpful context and supporting details while staying faithful to the user’s intent. Respond directly to the recipient without adding guidance about how to use the message.'
+      'You elaborate on the user’s instructions to produce a fuller, more detailed response from their perspective. Add relevant context, clarifying details, and smooth transitions while staying faithful to the user’s intent and voice. Respond directly to the recipient and do not include meta commentary or guidance about using the message.'
   },
   {
     id: 'casual',
     label: 'Casual',
     systemPrompt:
-      'You write in a relaxed, friendly tone. Turn the user’s instructions into an approachable message that sounds natural in everyday conversation, addressed directly to the recipient. Avoid meta commentary or explanations.'
+      'You write in a relaxed, friendly tone. Turn the user’s instructions into an approachable message from their perspective that sounds natural in everyday conversation while keeping key details intact. Address the recipient directly and avoid meta commentary or explanations.'
   },
   {
     id: 'bullet',
     label: 'Bullet list',
     systemPrompt:
-      'You return the final message as a concise bullet list that highlights the key points from the user’s instructions. Each bullet should be a complete, recipient-ready statement. Do not add prose outside the bullet list.'
-  },
-  {
-    id: 'action-items',
-    label: 'Action items',
-    systemPrompt:
-      'You provide a list of clear action items based on the user’s instructions. Use imperative language, include owners or deadlines when they are implied, and present the response as numbered steps or bullet items only.'
+      'You return the final message as a concise bullet list from the user’s perspective that highlights the key points in order of importance. Each bullet must stand alone as a recipient-ready statement. Do not add prose outside the bullet list or comment on the instructions.'
   },
   {
     id: 'shorten',
     label: 'Shorten',
     systemPrompt:
-      'You create a significantly shorter message that still communicates the critical information from the user’s instructions. Respond from the user’s perspective, address the recipient directly, and avoid any meta commentary.'
+      'You condense the user’s instructions into a significantly shorter message while preserving essential information, intent, and voice. Respond from the user’s perspective, address the recipient directly, and avoid meta commentary or references to editing.'
   }
 ];
 
 const rewritePresetConfig: Record<RewritePreset, RewritePresetConfig> = {
   'concise-formal': {
     sharedContext: BASE_SHARED_CONTEXT,
-    context: 'Rewrite the text to be concise, professional, and suitable for business communication.',
+    context:
+      'Rewrite the text from the user’s perspective so it feels polished, formal, and ready for professional settings while preserving their intent and voice.',
     tone: 'more-formal',
     length: 'shorter',
     format: 'plain-text'
   },
   expand: {
     sharedContext: BASE_SHARED_CONTEXT,
-    context: 'Expand the text with helpful details while keeping the original intent clear.',
+    context:
+      'Rewrite the text from the user’s perspective, adding helpful clarification and context while keeping their intent and meaning clear.',
     length: 'longer',
     format: 'plain-text'
   },
   casual: {
     sharedContext: BASE_SHARED_CONTEXT,
-    context: 'Rewrite the text with a relaxed, friendly tone while keeping all key information.',
+    context:
+      'Rewrite the text from the user’s perspective in a relaxed, conversational tone while preserving all key information and intent.',
     tone: 'more-casual',
     format: 'plain-text'
   },
   bullet: {
     sharedContext: BASE_SHARED_CONTEXT,
-    context: 'Rewrite the text as a concise bullet list highlighting the key points.',
+    context:
+      'Rewrite the text from the user’s perspective as a concise bullet list that highlights the most important points. Keep each bullet direct and readable.',
     format: 'bullet'
-  },
-  'action-items': {
-    sharedContext: BASE_SHARED_CONTEXT,
-    context: 'Rewrite the text as a list of clear action items with imperative verbs and owners where possible.',
-    format: 'plain-text',
-    tone: 'more-direct'
   },
   shorten: {
     sharedContext: BASE_SHARED_CONTEXT,
-    context: 'Rewrite the text so it is significantly shorter while preserving key information and readability.',
+    context:
+      'Rewrite the text from the user’s perspective, trimming redundancy so it stays clear, readable, and focused on the essential information.',
     length: 'shorter',
     format: 'plain-text'
   }
