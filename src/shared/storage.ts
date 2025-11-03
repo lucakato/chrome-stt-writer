@@ -27,8 +27,8 @@ export type TranscriptSession = {
   sourceUrl?: string;
 };
 
-const STORAGE_KEY = 'ekko:sessions';
-const ACTIVE_SESSION_KEY = 'ekko:activeSessionId';
+const STORAGE_KEY = 'echo:sessions';
+const ACTIVE_SESSION_KEY = 'echo:activeSessionId';
 
 async function readSessions(): Promise<TranscriptSession[]> {
   if (!chrome.storage?.local) {

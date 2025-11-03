@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
-  "name": "Ekko: Write with Voice",
+  "name": "Echo: Write with Voice",
   "description": "Capture speech, summarize, and rewrite text directly in Chrome’s side panel using on-device AI.",
   "version": "0.1.0",
   "action": {
-    "default_title": "Ekko: Write with Voice"
+    "default_title": "Echo: Write with Voice"
   },
   "permissions": [
     "storage",
@@ -17,14 +17,14 @@
   ],
   "commands": {
     "_execute_action": {
-      "description": "Open Ekko"
+      "description": "Open Echo"
     },
     "toggle-recording": {
       "suggested_key": {
         "default": "Ctrl+Shift+Period",
         "mac": "Command+Shift+Period"
       },
-      "description": "Start or stop Ekko recording"
+      "description": "Start or stop Echo recording"
     },
     "summarize-selection": {
       "suggested_key": {

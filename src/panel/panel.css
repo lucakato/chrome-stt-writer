@@ -1,7 +1,7 @@
 :root {
   color-scheme: light dark;
-  --ekko-primary: #5968f2;
-  --ekko-accent: #aeb6ff;
+  --echo-primary: #5968f2;
+  --echo-accent: #aeb6ff;
   --surface: #ffffff;
   --surface-variant: #f5f6ff;
   --text-primary: #1f1f3d;
@@ -83,7 +83,7 @@ body {
 }
 
 .mode-switch__button--active {
-  background: var(--ekko-primary);
+  background: var(--echo-primary);
   color: #ffffff;
   box-shadow: 0 8px 14px rgba(89, 104, 242, 0.3);
 }
@@ -97,7 +97,7 @@ body {
 .brand__title {
   font-size: 1.2rem;
   font-weight: 700;
-  color: var(--ekko-primary);
+  color: var(--echo-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -118,7 +118,7 @@ body {
   padding: 6px 10px;
   border-radius: 999px;
   background: var(--surface-variant);
-  color: var(--ekko-primary);
+  color: var(--echo-primary);
   font-size: 0.75rem;
   font-weight: 600;
 }
@@ -195,7 +195,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 12px;
-  background: var(--ekko-primary);
+  background: var(--echo-primary);
   color: white;
   cursor: pointer;
   transition: transform 0.15s ease, box-shadow 0.15s ease;
@@ -235,7 +235,7 @@ body {
 
 .record-button__icon--recording {
   background: #ffffff;
-  color: var(--ekko-primary);
+  color: var(--echo-primary);
   animation: record-blink 1s ease-in-out infinite;
 }
 
@@ -274,7 +274,7 @@ body {
 
 .status-chip--active {
   background: rgba(89, 104, 242, 0.15);
-  color: var(--ekko-primary);
+  color: var(--echo-primary);
 }
 
 .transcript-area {
@@ -291,7 +291,7 @@ body {
 }
 
 .transcript-area:focus {
-  outline: 2px solid var(--ekko-accent);
+  outline: 2px solid var(--echo-accent);
   border-color: transparent;
 }
 
@@ -314,7 +314,7 @@ body {
   border-radius: 10px;
   border: 1px solid transparent;
   background: var(--surface-variant);
-  color: var(--ekko-primary);
+  color: var(--echo-primary);
   font-weight: 600;
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
@@ -324,14 +324,14 @@ body {
 }
 
 .button--primary {
-  background: var(--ekko-primary);
+  background: var(--echo-primary);
   color: white;
 }
 
 .button--outline {
   background: transparent;
-  border: 1px solid var(--ekko-primary);
-  color: var(--ekko-primary);
+  border: 1px solid var(--echo-primary);
+  color: var(--echo-primary);
 }
 
 .button--outline:hover {
@@ -339,7 +339,7 @@ body {
 }
 
 .button:hover {
-  background: var(--ekko-accent);
+  background: var(--echo-accent);
   color: var(--text-primary);
 }
 
@@ -419,12 +419,12 @@ body {
 
 .compose-chip:hover {
   background: rgba(89, 104, 242, 0.08);
-  color: var(--ekko-primary);
+  color: var(--echo-primary);
 }
 
 .compose-chip--active {
-  background: var(--ekko-primary);
-  border-color: var(--ekko-primary);
+  background: var(--echo-primary);
+  border-color: var(--echo-primary);
   color: #ffffff;
   box-shadow: 0 6px 14px rgba(89, 104, 242, 0.25);
 }
@@ -549,7 +549,7 @@ body {
   background: transparent;
   border: none;
   padding: 0;
-  color: var(--ekko-primary);
+  color: var(--echo-primary);
   font-weight: 600;
   cursor: pointer;
   align-self: flex-start;
@@ -619,7 +619,7 @@ body {
 .onboarding-card__title {
   margin: 0;
   font-size: 0.95rem;
-  color: var(--ekko-primary);
+  color: var(--echo-primary);
 }
 
 .onboarding-card__list {
@@ -654,8 +654,8 @@ body {
   }
 
   .button--outline {
-    border-color: var(--ekko-accent);
-    color: var(--ekko-accent);
+    border-color: var(--echo-accent);
+    color: var(--echo-accent);
   }
 
   .button--outline:hover {

@@ -7,22 +7,22 @@ export type DirectInsertPayload = {
 
 export type ComposeOutputPayload = ComposeDraftFields & { raw?: string };
 
-export type EkkoMessage =
+export type EchoMessage =
   | {
-      type: 'ekko/direct-insert/toggle';
+      type: 'echo/direct-insert/toggle';
       payload: {
         enabled: boolean;
       };
     }
   | {
-      type: 'ekko/transcript/update';
+      type: 'echo/transcript/update';
       payload: {
         transcript: string;
         origin: 'panel' | 'content';
       };
     }
   | {
-      type: 'ekko/ai/summarize';
+      type: 'echo/ai/summarize';
       payload: {
         sessionId?: string;
         transcript: string;
@@ -30,7 +30,7 @@ export type EkkoMessage =
       };
     }
   | {
-      type: 'ekko/ai/rewrite';
+      type: 'echo/ai/rewrite';
       payload: {
         sessionId?: string;
         preset: string;
@@ -39,7 +39,7 @@ export type EkkoMessage =
       };
     }
   | {
-      type: 'ekko/ai/compose';
+      type: 'echo/ai/compose';
       payload: {
         sessionId?: string;
         preset: string;
@@ -48,32 +48,32 @@ export type EkkoMessage =
       };
     }
   | {
-      type: 'ekko/direct-insert/apply';
+      type: 'echo/direct-insert/apply';
       payload: DirectInsertPayload;
     }
   | {
-      type: 'ekko/direct-insert/focus';
+      type: 'echo/direct-insert/focus';
       payload?: Record<string, never>;
     }
   | {
-      type: 'ekko/direct-insert/query';
+      type: 'echo/direct-insert/query';
       payload?: Record<string, never>;
     }
   | {
-      type: 'ekko/direct-insert/initialized';
+      type: 'echo/direct-insert/initialized';
       payload?: {
         enabled: boolean;
       };
     }
   | {
-      type: 'ekko/sidepanel/open';
+      type: 'echo/sidepanel/open';
       payload?: {
         action?: 'toggle' | 'open' | 'close';
         windowId?: number;
       };
     }
   | {
-      type: 'ekko/sidepanel/state';
+      type: 'echo/sidepanel/state';
       payload: {
         open: boolean;
         tabId?: number;
@@ -81,11 +81,11 @@ export type EkkoMessage =
       };
     }
   | {
-      type: 'ekko/widget/insert';
+      type: 'echo/widget/insert';
       payload: DirectInsertPayload;
     };
 
-export type EkkoResponse =
+export type EchoResponse =
   | {
       ok: true;
       data?: unknown;

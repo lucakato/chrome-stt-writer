@@ -1,4 +1,4 @@
-const ONBOARDING_KEY = 'ekko:onboarding';
+const ONBOARDING_KEY = 'echo:onboarding';
 
 type OnboardingState = {
   microphoneAccepted: boolean;

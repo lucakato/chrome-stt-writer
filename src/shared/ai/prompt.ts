@@ -416,7 +416,7 @@ async function runComposePrompt({
         if (aggregated.trim().length > 0) {
           const draft = coerceComposeDraft(aggregated);
           if (draft) {
-            console.info('[Ekko] Prompt API structured compose result (streaming)', {
+            console.info('[Echo] Prompt API structured compose result (streaming)', {
               draft,
               raw: aggregated
             });
@@ -424,7 +424,7 @@ async function runComposePrompt({
             return draft;
           }
           const fallbackDraft = createFallbackDraft(aggregated);
-          console.info('[Ekko] Prompt API compose fallback (streaming aggregate)', {
+          console.info('[Echo] Prompt API compose fallback (streaming aggregate)', {
             draft: fallbackDraft,
             raw: aggregated
           });
@@ -447,14 +447,14 @@ async function runComposePrompt({
       fallbackRaw = rawString;
       const draft = coerceComposeDraft(payload);
       if (draft) {
-        console.info('[Ekko] Prompt API structured compose result', { draft, raw: rawString });
+        console.info('[Echo] Prompt API structured compose result', { draft, raw: rawString });
         onChunk?.(draft.content);
         return draft;
       }
 
       if (typeof payload === 'string' && payload.trim().length > 0) {
         const fallbackDraft = createFallbackDraft(payload);
-        console.info('[Ekko] Prompt API compose fallback (string payload)', {
+        console.info('[Echo] Prompt API compose fallback (string payload)', {
           payload,
           draft: fallbackDraft
         });
@@ -465,7 +465,7 @@ async function runComposePrompt({
 
     if (fallbackRaw.trim().length > 0) {
       const fallbackDraft = createFallbackDraft(fallbackRaw);
-      console.info('[Ekko] Prompt API compose fallback (aggregated raw)', {
+      console.info('[Echo] Prompt API compose fallback (aggregated raw)', {
         raw: fallbackRaw,
         draft: fallbackDraft
       });
