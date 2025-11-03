@@ -5,15 +5,15 @@ import { MdKeyboardVoice } from 'react-icons/md';
 import { RiVoiceprintFill } from 'react-icons/ri';
 import { IoSettingsSharp } from 'react-icons/io5';
 import { FiCopy, FiCornerDownRight } from 'react-icons/fi';
-import type { EchoMessage, EchoResponse } from '@shared/messages';
+import type { EkkoMessage, EkkoResponse } from '@shared/messages';
 import {
-  getEchoSettings,
-  observeEchoSettings,
-  setEchoSettings,
+  getEkkoSettings,
+  observeEkkoSettings,
+  setEkkoSettings,
   DEFAULT_SETTINGS,
-  type EchoSettings,
-  type EchoMode,
-  type EchoSettingsChange
+  type EkkoSettings,
+  type EkkoMode,
+  type EkkoSettingsChange
 } from '@shared/settings';
 import { composeFromAudio, composeFromText, TRANSCRIBE_STRUCTURED_SYSTEM_PROMPT } from '@shared/ai/prompt';
 import { rewriteText } from '@shared/ai/rewriter';
@@ -28,7 +28,7 @@ import {
 } from '@shared/compose';
 
 const WIDGET_DEFAULT_COMPOSE_PROMPT =
-  'You are Echo, an on-device assistant. Listen carefully and give a direct, helpful answer that the user can use immediately. Reply in the user’s language, stay concise, and do not add meta commentary or extra instructions.';
+  'You are Ekko, an on-device assistant. Listen carefully and give a direct, helpful answer that the user can use immediately. Reply in the user’s language, stay concise, and do not add meta commentary or extra instructions.';
 
 function iconMarkup(icon: IconType): string {
   return renderToStaticMarkup(
@@ -54,7 +54,12 @@ type WidgetRewritePreset =
   | 'expand'
   | 'casual'
   | 'bullet'
+<<<<<<< Updated upstream
+  | 'action-items'
+  | 'custom';
+=======
   | 'shorten';
+>>>>>>> Stashed changes
 
 type WidgetRewriteConfig = {
   sharedContext?: string;
@@ -114,12 +119,26 @@ const WIDGET_REWRITE_OPTIONS: Array<{
     }
   },
   {
-    id: 'shorten',
-    label: 'Shorten',
+<<<<<<< Updated upstream
+    id: 'action-items',
+    label: 'Action items',
     config: {
       sharedContext: WIDGET_BASE_SHARED_CONTEXT,
-      context: 'Rewrite the text so it is significantly shorter while preserving key information and readability.',
-      length: 'shorter',
+      context: 'Rewrite the text as a list of clear action items with imperative verbs and owners where possible.',
+      format: 'plain-text',
+      tone: 'more-direct'
+    }
+  },
+  {
+    id: 'custom',
+    label: 'Custom instructions',
+=======
+    id: 'shorten',
+    label: 'Shorten',
+>>>>>>> Stashed changes
+    config: {
+      sharedContext: WIDGET_BASE_SHARED_CONTEXT,
+      context: 'Rewrite the text to improve clarity, flow, and readability while preserving the author’s intent.',
       format: 'plain-text'
     }
   }
@@ -141,16 +160,16 @@ type RecordingState = 'idle' | 'recording' | 'processing';
 
 declare global {
   interface Window {
-    __echoWidgetInjected__?: boolean;
+    __ekkoWidgetInjected__?: boolean;
   }
 }
 
 if (window.top !== window.self) {
   // Only render the floating widget in the top-level document.
-} else if (!window.__echoWidgetInjected__) {
-  window.__echoWidgetInjected__ = true;
+} else if (!window.__ekkoWidgetInjected__) {
+  window.__ekkoWidgetInjected__ = true;
 
-  let settings: EchoSettings = DEFAULT_SETTINGS;
+  let settings: EkkoSettings = DEFAULT_SETTINGS;
   let recorderState: RecordingState = 'idle';
   let recognition: SpeechRecognition | null = null;
   let recognitionTimer: number | null = null;
@@ -204,18 +223,18 @@ if (window.top !== window.self) {
   let tempDirectInsertDepth = 0;
 
   function ensureStyle() {
-    if (document.getElementById('echo-floating-widget-style')) return;
+    if (document.getElementById('ekko-floating-widget-style')) return;
     const style = document.createElement('style');
-    style.id = 'echo-floating-widget-style';
+    style.id = 'ekko-floating-widget-style';
     style.textContent = `
-      #echo-floating-widget-root {
+      #ekko-floating-widget-root {
         position: fixed;
         bottom: 20px;
         right: 20px;
         z-index: 2147483647;
         font-family: 'Inter', system-ui, sans-serif;
       }
-      #echo-floating-widget-trigger {
+      #ekko-floating-widget-trigger {
         width: 48px;
         height: 48px;
         border-radius: 24px;
@@ -228,10 +247,10 @@ if (window.top !== window.self) {
         cursor: pointer;
         box-shadow: 0 12px 28px rgba(89, 104, 242, 0.35);
       }
-      #echo-floating-widget-trigger:hover {
+      #ekko-floating-widget-trigger:hover {
         transform: translateY(-1px);
       }
-      .echo-popup {
+      .ekko-popup {
         position: absolute;
         bottom: 60px;
         right: 0;
@@ -245,34 +264,34 @@ if (window.top !== window.self) {
         gap: 12px;
         padding: 16px;
       }
-      .echo-popup--open {
+      .ekko-popup--open {
         display: flex;
       }
-      .echo-popup__header {
+      .ekko-popup__header {
         display: flex;
         justify-content: space-between;
         align-items: center;
       }
-      .echo-popup__title {
+      .ekko-popup__title {
         font-size: 0.95rem;
         font-weight: 600;
         color: #1f1f3d;
       }
-      .echo-popup__close {
+      .ekko-popup__close {
         border: none;
         background: transparent;
         font-size: 1rem;
         color: #4c4c70;
         cursor: pointer;
       }
-      .echo-popup__modes {
+      .ekko-popup__modes {
         display: inline-flex;
         background: rgba(89, 104, 242, 0.1);
         border-radius: 999px;
         padding: 2px;
         gap: 4px;
       }
-      .echo-popup__mode {
+      .ekko-popup__mode {
         border: none;
         background: transparent;
         color: #4c4c70;
@@ -281,11 +300,11 @@ if (window.top !== window.self) {
         padding: 6px 14px;
         cursor: pointer;
       }
-      .echo-popup__mode--active {
+      .ekko-popup__mode--active {
         background: #5968f2;
         color: #ffffff;
       }
-      .echo-popup__prompt {
+      .ekko-popup__prompt {
         border-radius: 12px;
         border: 1px solid rgba(89, 104, 242, 0.2);
         padding: 8px;
@@ -297,25 +316,25 @@ if (window.top !== window.self) {
         box-sizing: border-box;
         margin-top: 10px;
       }
-      .echo-controls {
+      .ekko-controls {
         display: inline-flex;
         align-items: center;
         gap: 8px;
         margin-top: 10px;
       }
-      .echo-popup__footer {
+      .ekko-popup__footer {
         display: flex;
         justify-content: space-between;
         align-items: center;
         gap: 8px;
         margin-top: 12px;
       }
-      .echo-popup__status,
-      .echo-popup__timer {
+      .ekko-popup__status,
+      .ekko-popup__timer {
         font-size: 0.75rem;
         color: #4c4c70;
       }
-      .echo-icon-button {
+      .ekko-icon-button {
         width: 36px;
         height: 36px;
         border-radius: 18px;
@@ -328,11 +347,11 @@ if (window.top !== window.self) {
         cursor: pointer;
         transition: color 0.2s ease, background 0.2s ease;
       }
-      .echo-icon-button--active {
+      .ekko-icon-button--active {
         background: #5968f2;
         color: #ffffff;
       }
-      .echo-output {
+      .ekko-output {
         display: none;
         flex-direction: column;
         gap: 6px;
@@ -346,36 +365,36 @@ if (window.top !== window.self) {
         width: 100%;
         box-sizing: border-box;
       }
-      .echo-output__scroll {
+      .ekko-output__scroll {
         overflow-y: auto;
         max-height: 140px;
         padding-right: 4px;
         width: 100%;
         box-sizing: border-box;
       }
-      .echo-output__subject {
+      .ekko-output__subject {
         margin: 0 0 6px;
         font-weight: 600;
         color: #404072;
         font-size: 0.8rem;
       }
-      .echo-output__text {
+      .ekko-output__text {
         margin: 0;
         font-size: 0.82rem;
         line-height: 1.4;
         color: #1f1f3d;
         white-space: pre-wrap;
       }
-      .echo-output__placeholder {
+      .ekko-output__placeholder {
         margin: 0;
         font-size: 0.78rem;
         color: #4c4c70;
         font-style: italic;
       }
-      .echo-icon-button--recording svg {
-        animation: echo-record-blink 1s ease-in-out infinite;
+      .ekko-icon-button--recording svg {
+        animation: ekko-record-blink 1s ease-in-out infinite;
       }
-      @keyframes echo-record-blink {
+      @keyframes ekko-record-blink {
         0%, 100% {
           opacity: 1;
         }
@@ -383,7 +402,7 @@ if (window.top !== window.self) {
           opacity: 0.4;
         }
       }
-      .echo-popup__regen {
+      .ekko-popup__regen {
         border: none;
         background: #5968f2;
         color: #ffffff;
@@ -393,20 +412,20 @@ if (window.top !== window.self) {
         cursor: pointer;
         margin-left: auto;
       }
-      .echo-transcribe-actions {
+      .ekko-transcribe-actions {
         display: none;
         flex-direction: column;
         align-items: flex-start;
         gap: 6px;
         margin-top: 8px;
       }
-      .echo-transcribe-actions__row {
+      .ekko-transcribe-actions__row {
         display: inline-flex;
         flex-wrap: wrap;
         align-items: center;
         gap: 6px;
       }
-      .echo-transcribe-actions__button {
+      .ekko-transcribe-actions__button {
         border: none;
         background: #5968f2;
         color: #ffffff;
@@ -417,11 +436,11 @@ if (window.top !== window.self) {
         font-size: 0.82rem;
         transition: background 0.2s ease;
       }
-      .echo-transcribe-actions__button:disabled {
+      .ekko-transcribe-actions__button:disabled {
         cursor: not-allowed;
         background: rgba(89, 104, 242, 0.4);
       }
-      .echo-transcribe-actions__select {
+      .ekko-transcribe-actions__select {
         border-radius: 8px;
         border: 1px solid rgba(89, 104, 242, 0.3);
         padding: 4px 8px;
@@ -429,7 +448,7 @@ if (window.top !== window.self) {
         color: #1f1f3d;
         background: #ffffff;
       }
-      .echo-transcribe-actions__copy {
+      .ekko-transcribe-actions__copy {
         width: 32px;
         height: 32px;
         border-radius: 16px;
@@ -441,11 +460,11 @@ if (window.top !== window.self) {
         color: #5968f2;
         cursor: pointer;
       }
-      .echo-transcribe-actions__copy:disabled {
+      .ekko-transcribe-actions__copy:disabled {
         cursor: not-allowed;
         opacity: 0.5;
       }
-      .echo-transcribe-actions__insert {
+      .ekko-transcribe-actions__insert {
         width: 32px;
         height: 32px;
         border-radius: 16px;
@@ -457,7 +476,7 @@ if (window.top !== window.self) {
         color: #ffffff;
         cursor: pointer;
       }
-      .echo-transcribe-actions__insert:disabled {
+      .ekko-transcribe-actions__insert:disabled {
         cursor: not-allowed;
         opacity: 0.5;
         background: rgba(89, 104, 242, 0.5);
@@ -469,7 +488,7 @@ if (window.top !== window.self) {
   function createRoot() {
     if (root) return;
     root = document.createElement('div');
-    root.id = 'echo-floating-widget-root';
+    root.id = 'ekko-floating-widget-root';
     document.body.appendChild(root);
   }
 
@@ -496,15 +515,15 @@ if (window.top !== window.self) {
     }
   }
 
-  function handleDirectInsertToggleMessage(message: EchoMessage) {
-    if (message.type === 'echo/direct-insert/toggle') {
+  function handleDirectInsertToggleMessage(message: EkkoMessage) {
+    if (message.type === 'ekko/direct-insert/toggle') {
       const enabled = !!(message.payload as { enabled?: boolean }).enabled;
       if (tempDirectInsertDepth === 0) {
         setDirectInsertState(enabled);
       } else {
         pendingBridgeMessage = { type: 'toggle', enabled };
       }
-    } else if (message.type === 'echo/direct-insert/initialized') {
+    } else if (message.type === 'ekko/direct-insert/initialized') {
       const enabled = !!(message.payload as { enabled?: boolean }).enabled;
       if (tempDirectInsertDepth === 0) {
         setDirectInsertState(enabled);
@@ -516,7 +535,7 @@ if (window.top !== window.self) {
 
   async function queryDirectInsertState() {
     try {
-      const response = (await chrome.runtime.sendMessage({ type: 'echo/direct-insert/query' } satisfies EchoMessage)) as EchoResponse | undefined;
+      const response = (await chrome.runtime.sendMessage({ type: 'ekko/direct-insert/query' } satisfies EkkoMessage)) as EkkoResponse | undefined;
       if (response && response.ok && response.data && typeof response.data === 'object') {
         const enabled = !!(response.data as { enabled?: boolean }).enabled;
         setDirectInsertState(enabled);
@@ -528,7 +547,7 @@ if (window.top !== window.self) {
 
   async function composeWidgetAudio(audioBuffer: ArrayBuffer): Promise<ComposeDraftResult> {
     const instruction = settings.composePrompt.trim();
-    console.info('[Echo] widget instruction:', instruction);
+    console.info('[Ekko] widget instruction:', instruction);
   const outputLanguage = resolveOutputLanguage();
     let lastDraft: ComposeDraftResult | null = null;
     const systemPrompt = instruction
@@ -564,7 +583,7 @@ if (window.top !== window.self) {
   async function insertComposeDraft(draft: ComposeDraftResult) {
     const response = await chrome.runtime
       .sendMessage({
-        type: 'echo/widget/insert',
+        type: 'ekko/widget/insert',
         payload: {
           draft: {
             content: draft.content,
@@ -572,7 +591,7 @@ if (window.top !== window.self) {
             paragraphs: draft.paragraphs
           }
         }
-      } satisfies EchoMessage)
+      } satisfies EkkoMessage)
       .catch((error) => {
         console.warn('Unable to insert compose output', error);
         throw error;
@@ -625,9 +644,9 @@ if (window.top !== window.self) {
 
     const response = await chrome.runtime
       .sendMessage({
-        type: 'echo/direct-insert/apply',
+        type: 'ekko/direct-insert/apply',
         payload
-      } satisfies EchoMessage)
+      } satisfies EkkoMessage)
       .catch((error) => {
         console.warn('Unable to insert transcript output', error);
         throw error;
@@ -728,13 +747,13 @@ if (window.top !== window.self) {
   function createTrigger() {
     if (triggerButton) return;
     triggerButton = document.createElement('button');
-    triggerButton.id = 'echo-floating-widget-trigger';
+    triggerButton.id = 'ekko-floating-widget-trigger';
     triggerButton.type = 'button';
     triggerButton.innerHTML = '<span aria-hidden="true">🗨️</span>';
-    triggerButton.title = 'Echo';
+    triggerButton.title = 'Ekko';
     triggerButton.addEventListener('click', () => {
       popupOpen = !popupOpen;
-      popup?.classList.toggle('echo-popup--open', popupOpen);
+      popup?.classList.toggle('ekko-popup--open', popupOpen);
     });
     root?.appendChild(triggerButton);
   }
@@ -742,22 +761,22 @@ if (window.top !== window.self) {
   function createPopup() {
     if (popup) return;
     popup = document.createElement('div');
-    popup.className = 'echo-popup';
+    popup.className = 'ekko-popup';
 
     const header = document.createElement('div');
-    header.className = 'echo-popup__header';
+    header.className = 'ekko-popup__header';
 
     const title = document.createElement('span');
-    title.className = 'echo-popup__title';
-    title.textContent = 'Echo';
+    title.className = 'ekko-popup__title';
+    title.textContent = 'Ekko';
 
     const close = document.createElement('button');
-    close.className = 'echo-popup__close';
+    close.className = 'ekko-popup__close';
     close.type = 'button';
     close.textContent = '✕';
     close.addEventListener('click', () => {
       popupOpen = false;
-      popup?.classList.remove('echo-popup--open');
+      popup?.classList.remove('ekko-popup--open');
     });
 
     header.appendChild(title);
@@ -766,17 +785,17 @@ if (window.top !== window.self) {
     const body = document.createElement('div');
 
     const modeWrapper = document.createElement('div');
-    modeWrapper.className = 'echo-popup__modes';
+    modeWrapper.className = 'ekko-popup__modes';
 
     const transcribeButton = document.createElement('button');
     transcribeButton.type = 'button';
-    transcribeButton.className = 'echo-popup__mode';
+    transcribeButton.className = 'ekko-popup__mode';
     transcribeButton.textContent = 'Transcribe';
     transcribeButton.addEventListener('click', () => switchMode('transcribe'));
 
     const composeButton = document.createElement('button');
     composeButton.type = 'button';
-    composeButton.className = 'echo-popup__mode';
+    composeButton.className = 'ekko-popup__mode';
     composeButton.textContent = 'Compose';
     composeButton.addEventListener('click', () => switchMode('compose'));
 
@@ -785,74 +804,74 @@ if (window.top !== window.self) {
     modeWrapper.appendChild(composeButton);
 
     const controlsRow = document.createElement('div');
-    controlsRow.className = 'echo-controls';
+    controlsRow.className = 'ekko-controls';
 
     transcribeOutputCard = document.createElement('div');
-    transcribeOutputCard.className = 'echo-output';
+    transcribeOutputCard.className = 'ekko-output';
     transcribeOutputScroll = document.createElement('div');
-    transcribeOutputScroll.className = 'echo-output__scroll';
+    transcribeOutputScroll.className = 'ekko-output__scroll';
     transcribeOutputScroll.style.display = 'none';
     transcribeOutputText = document.createElement('p');
-    transcribeOutputText.className = 'echo-output__text';
+    transcribeOutputText.className = 'ekko-output__text';
     transcribeOutputScroll.appendChild(transcribeOutputText);
     transcribeOutputPlaceholder = document.createElement('p');
-    transcribeOutputPlaceholder.className = 'echo-output__placeholder';
+    transcribeOutputPlaceholder.className = 'ekko-output__placeholder';
     transcribeOutputPlaceholder.textContent = 'Your transcript will appear here.';
     transcribeOutputCard.appendChild(transcribeOutputScroll);
     transcribeOutputCard.appendChild(transcribeOutputPlaceholder);
 
     promptTextarea = document.createElement('textarea');
-    promptTextarea.className = 'echo-popup__prompt';
+    promptTextarea.className = 'ekko-popup__prompt';
     promptTextarea.placeholder = 'Not what you want? Assist the AI.';
     promptTextarea.addEventListener('input', (event) => {
       const value = (event.target as HTMLTextAreaElement).value;
       settings = { ...settings, composePrompt: value };
-      setEchoSettings({ composePrompt: value }).catch((error) =>
+      setEkkoSettings({ composePrompt: value }).catch((error) =>
         console.warn('Unable to update prompt', error)
       );
     });
 
     composeOutputCard = document.createElement('div');
-    composeOutputCard.className = 'echo-output';
+    composeOutputCard.className = 'ekko-output';
 
     composeOutputScroll = document.createElement('div');
-    composeOutputScroll.className = 'echo-output__scroll';
+    composeOutputScroll.className = 'ekko-output__scroll';
     composeOutputScroll.style.display = 'none';
 
     composeOutputSubject = document.createElement('p');
-    composeOutputSubject.className = 'echo-output__subject';
+    composeOutputSubject.className = 'ekko-output__subject';
     composeOutputSubject.style.display = 'none';
     composeOutputScroll.appendChild(composeOutputSubject);
 
     composeOutputText = document.createElement('p');
-    composeOutputText.className = 'echo-output__text';
+    composeOutputText.className = 'ekko-output__text';
     composeOutputScroll.appendChild(composeOutputText);
 
     composeOutputPlaceholder = document.createElement('p');
-    composeOutputPlaceholder.className = 'echo-output__placeholder';
+    composeOutputPlaceholder.className = 'ekko-output__placeholder';
     composeOutputPlaceholder.textContent = 'After you record, your AI draft will appear here.';
 
     composeOutputCard.appendChild(composeOutputScroll);
     composeOutputCard.appendChild(composeOutputPlaceholder);
 
     const footer = document.createElement('div');
-    footer.className = 'echo-popup__footer';
+    footer.className = 'ekko-popup__footer';
 
     statusLabel = document.createElement('span');
-    statusLabel.className = 'echo-popup__status';
+    statusLabel.className = 'ekko-popup__status';
 
     timerLabel = document.createElement('span');
-    timerLabel.className = 'echo-popup__timer';
+    timerLabel.className = 'ekko-popup__timer';
 
     micButton = document.createElement('button');
-    micButton.className = 'echo-icon-button';
+    micButton.className = 'ekko-icon-button';
     micButton.type = 'button';
     micButton.title = 'Start recording';
     micButton.innerHTML = ICON_MIC_IDLE;
     micButton.addEventListener('click', handleMicClick);
 
     settingsButton = document.createElement('button');
-    settingsButton.className = 'echo-icon-button';
+    settingsButton.className = 'ekko-icon-button';
     settingsButton.type = 'button';
     settingsButton.title = 'Open settings';
     settingsButton.innerHTML = ICON_SETTINGS;
@@ -867,8 +886,8 @@ if (window.top !== window.self) {
                 .catch(() => undefined)
             : undefined;
 
-        const response = await chrome.runtime.sendMessage<EchoMessage, EchoResponse>({
-          type: 'echo/sidepanel/open',
+        const response = await chrome.runtime.sendMessage<EkkoMessage, EkkoResponse>({
+          type: 'ekko/sidepanel/open',
           payload: { action: 'toggle', windowId: payloadWindowId ?? undefined }
         });
         if (!response || typeof response !== 'object' || !('ok' in response) || !response.ok) {
@@ -893,7 +912,7 @@ if (window.top !== window.self) {
           setStatus('Settings opened in side panel.');
         }
       } catch (error) {
-        console.warn('Unable to open Echo side panel from widget', error);
+        console.warn('Unable to open Ekko side panel from widget', error);
         setStatus('Unable to open settings.');
       }
     });
@@ -902,16 +921,16 @@ if (window.top !== window.self) {
     controlsRow.appendChild(settingsButton);
 
     transcribeActionsRow = document.createElement('div');
-    transcribeActionsRow.className = 'echo-transcribe-actions';
+    transcribeActionsRow.className = 'ekko-transcribe-actions';
 
     refineButton = document.createElement('button');
     refineButton.type = 'button';
-    refineButton.className = 'echo-transcribe-actions__button';
+    refineButton.className = 'ekko-transcribe-actions__button';
     refineButton.textContent = 'Refine';
     refineButton.addEventListener('click', handleRefineClick);
 
     rewriteSelect = document.createElement('select');
-    rewriteSelect.className = 'echo-transcribe-actions__select';
+    rewriteSelect.className = 'ekko-transcribe-actions__select';
     WIDGET_REWRITE_OPTIONS.forEach((option) => {
       const opt = document.createElement('option');
       opt.value = option.id;
@@ -926,26 +945,26 @@ if (window.top !== window.self) {
 
     polishButton = document.createElement('button');
     polishButton.type = 'button';
-    polishButton.className = 'echo-transcribe-actions__button';
+    polishButton.className = 'ekko-transcribe-actions__button';
     polishButton.textContent = 'Polish';
     polishButton.addEventListener('click', handlePolishClick);
 
     copyButton = document.createElement('button');
     copyButton.type = 'button';
-    copyButton.className = 'echo-transcribe-actions__copy';
+    copyButton.className = 'ekko-transcribe-actions__copy';
     copyButton.innerHTML = ICON_COPY;
     copyButton.title = 'Copy transcript';
     copyButton.addEventListener('click', handleCopyTranscript);
 
     insertButton = document.createElement('button');
     insertButton.type = 'button';
-    insertButton.className = 'echo-transcribe-actions__insert';
+    insertButton.className = 'ekko-transcribe-actions__insert';
     insertButton.innerHTML = ICON_INSERT;
     insertButton.title = 'Insert into page';
     insertButton.addEventListener('click', handleInsertTranscript);
 
     const polishRow = document.createElement('div');
-    polishRow.className = 'echo-transcribe-actions__row';
+    polishRow.className = 'ekko-transcribe-actions__row';
     polishRow.appendChild(rewriteSelect);
     polishRow.appendChild(polishButton);
     polishRow.appendChild(copyButton);
@@ -956,7 +975,7 @@ if (window.top !== window.self) {
 
     regenerateButton = document.createElement('button');
     regenerateButton.type = 'button';
-    regenerateButton.className = 'echo-popup__regen';
+    regenerateButton.className = 'ekko-popup__regen';
     regenerateButton.textContent = 'Re-generate';
     regenerateButton.addEventListener('click', handleRegenerate);
 
@@ -983,11 +1002,11 @@ if (window.top !== window.self) {
   function updateModeUi() {
     if (!modeButtons) return;
     if (settings.mode === 'transcribe') {
-      modeButtons.transcribe.classList.add('echo-popup__mode--active');
-      modeButtons.compose.classList.remove('echo-popup__mode--active');
+      modeButtons.transcribe.classList.add('ekko-popup__mode--active');
+      modeButtons.compose.classList.remove('ekko-popup__mode--active');
     } else {
-      modeButtons.compose.classList.add('echo-popup__mode--active');
-      modeButtons.transcribe.classList.remove('echo-popup__mode--active');
+      modeButtons.compose.classList.add('ekko-popup__mode--active');
+      modeButtons.transcribe.classList.remove('ekko-popup__mode--active');
     }
     if (promptTextarea) {
       const visible = settings.mode === 'compose';
@@ -1006,18 +1025,18 @@ if (window.top !== window.self) {
   function updateMicUi() {
     if (!micButton) return;
     if (recorderState === 'recording') {
-      micButton.classList.add('echo-icon-button--active');
-      micButton.classList.add('echo-icon-button--recording');
+      micButton.classList.add('ekko-icon-button--active');
+      micButton.classList.add('ekko-icon-button--recording');
       micButton.innerHTML = ICON_MIC_RECORDING;
       micButton.title = 'Stop recording';
     } else if (recorderState === 'processing') {
-      micButton.classList.add('echo-icon-button--active');
-      micButton.classList.remove('echo-icon-button--recording');
+      micButton.classList.add('ekko-icon-button--active');
+      micButton.classList.remove('ekko-icon-button--recording');
       micButton.innerHTML = ICON_MIC_PROCESSING;
       micButton.title = 'Processing…';
     } else {
-      micButton.classList.remove('echo-icon-button--active');
-      micButton.classList.remove('echo-icon-button--recording');
+      micButton.classList.remove('ekko-icon-button--active');
+      micButton.classList.remove('ekko-icon-button--recording');
       micButton.innerHTML = ICON_MIC_IDLE;
       micButton.title = 'Start recording';
     }
@@ -1069,9 +1088,9 @@ if (window.top !== window.self) {
     adjustDepth();
     const response = await runtime
       .sendMessage({
-        type: 'echo/direct-insert/toggle',
+        type: 'ekko/direct-insert/toggle',
         payload: { enabled }
-      } satisfies EchoMessage)
+      } satisfies EkkoMessage)
       .catch((error) => {
         console.warn('Unable to toggle direct insert bridge', error);
         rollbackDepth();
@@ -1312,7 +1331,7 @@ if (window.top !== window.self) {
     } else if (root) {
       root.style.display = 'none';
       popupOpen = false;
-      popup?.classList.remove('echo-popup--open');
+      popup?.classList.remove('ekko-popup--open');
     }
     updateModeUi();
     updateMicUi();
@@ -1325,11 +1344,11 @@ if (window.top !== window.self) {
     }
   }
 
-  function switchMode(mode: EchoMode) {
+  function switchMode(mode: EkkoMode) {
     if (settings.mode === mode) return;
     settings = { ...settings, mode };
     updateModeUi();
-    setEchoSettings({ mode }).catch((error) => console.warn('Unable to switch mode', error));
+    setEkkoSettings({ mode }).catch((error) => console.warn('Unable to switch mode', error));
     if (recorderState === 'recording') {
       stopRecording();
     }
@@ -1384,7 +1403,7 @@ if (window.top !== window.self) {
       if (finalText && finalText !== lastLoggedWidgetTranscript) {
         const confidenceOutput =
           typeof lastConfidence === 'number' ? Number(lastConfidence.toFixed(3)) : undefined;
-        console.info('[Echo] Widget speech recognition final result', {
+        console.info('[Ekko] Widget speech recognition final result', {
           transcript: finalText,
           confidence: confidenceOutput
         });
@@ -1495,7 +1514,7 @@ if (window.top !== window.self) {
     mediaRecorder = mimeType ? new MediaRecorder(mediaStream, { mimeType }) : new MediaRecorder(mediaStream);
     mimeType = mediaRecorder.mimeType || mimeType;
     try {
-      console.info('[Echo] Widget compose recorder MIME', mimeType);
+      console.info('[Ekko] Widget compose recorder MIME', mimeType);
     } catch {
       /* ignore */
     }
@@ -1805,7 +1824,7 @@ if (window.top !== window.self) {
     }
   }
 
-  function applySettingsChange(value: EchoSettings, changed?: EchoSettingsChange) {
+  function applySettingsChange(value: EkkoSettings, changed?: EkkoSettingsChange) {
     if (changed) {
       settings = {
         floatingWidgetEnabled: changed.floatingWidgetEnabled ? value.floatingWidgetEnabled : settings.floatingWidgetEnabled,
@@ -1819,14 +1838,14 @@ if (window.top !== window.self) {
   }
 
   function bootstrap() {
-    console.info('[Echo] Floating widget bootstrap');
+    console.info('[Ekko] Floating widget bootstrap');
     ensureWidget();
     void queryDirectInsertState();
-    chrome.runtime.onMessage.addListener((message: EchoMessage) => {
+    chrome.runtime.onMessage.addListener((message: EkkoMessage) => {
       handleDirectInsertToggleMessage(message);
       return false;
     });
-    getEchoSettings()
+    getEkkoSettings()
       .then((value) => {
         applySettingsChange(value);
         if (promptTextarea && (!document.activeElement || document.activeElement !== promptTextarea)) {
@@ -1834,10 +1853,10 @@ if (window.top !== window.self) {
         }
       })
       .catch((error) => {
-        console.warn('Unable to load Echo settings', error);
+        console.warn('Unable to load Ekko settings', error);
       });
 
-    observeEchoSettings((value, changed) => {
+    observeEkkoSettings((value, changed) => {
       applySettingsChange(value, changed);
     });
   }

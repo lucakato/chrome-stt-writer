@@ -1,12 +1,12 @@
-import { DirectInsertPayload, EchoMessage, EchoResponse } from '@shared/messages';
+import { DirectInsertPayload, EkkoMessage, EkkoResponse } from '@shared/messages';
 import { ComposeDraftFields, deriveParagraphs, joinParagraphs } from '@shared/compose';
 import { listSessions, upsertTranscript } from '@shared/storage';
-const DIRECT_INSERT_SCRIPT_ID = 'echo-direct-insert-script';
-const DIRECT_INSERT_STORAGE_KEY = 'echo:directInsertEnabled';
+const DIRECT_INSERT_SCRIPT_ID = 'ekko-direct-insert-script';
+const DIRECT_INSERT_STORAGE_KEY = 'ekko:directInsertEnabled';
 let directInsertEnabled = true;
 const directInsertFrameMap = new Map<number, number>();
 const sidePanelState = new Map<string, boolean>();
-const SIDE_PANEL_STATE_KEY = 'echo:sidepanel:state';
+const SIDE_PANEL_STATE_KEY = 'ekko:sidepanel:state';
 
 type SidePanelTarget = { tabId?: number; windowId?: number };
 
@@ -265,9 +265,9 @@ async function toggleDirectInsert(enabled: boolean) {
     const options = typeof frameId === 'number' ? { frameId } : undefined;
     await chrome.tabs
       .sendMessage(tabId, {
-        type: 'echo/direct-insert/toggle',
+        type: 'ekko/direct-insert/toggle',
         payload: { enabled }
-      } satisfies EchoMessage, options)
+      } satisfies EkkoMessage, options)
       .catch(() => {
         /* Frame may not have injected script yet; ignore */
       });
@@ -288,9 +288,9 @@ async function toggleDirectInsert(enabled: boolean) {
 }
 
 async function handleTranscriptUpdate(
-  message: Extract<EchoMessage, { type: 'echo/transcript/update' }>
+  message: Extract<EkkoMessage, { type: 'ekko/transcript/update' }>
 ) {
-  if (message.type !== 'echo/transcript/update') {
+  if (message.type !== 'ekko/transcript/update') {
     return { session: null, delivered: false };
   }
 
@@ -310,12 +310,12 @@ async function handleTranscriptUpdate(
 
   const frameId = directInsertFrameMap.get(tabId);
   const messageToSend = {
-    type: 'echo/transcript/update',
+    type: 'ekko/transcript/update',
     payload: {
       transcript: session.transcript,
       origin: 'panel'
     }
-  } satisfies EchoMessage;
+  } satisfies EkkoMessage;
 
   const options = typeof frameId === 'number' ? { frameId } : undefined;
 
@@ -336,7 +336,7 @@ async function handleTranscriptUpdate(
   return { session, delivered };
 }
 
-async function handleSummarizeUpdate(message: Extract<EchoMessage, { type: 'echo/ai/summarize' }>) {
+async function handleSummarizeUpdate(message: Extract<EkkoMessage, { type: 'ekko/ai/summarize' }>) {
   const session = await upsertTranscript(message.payload.transcript, {
     id: message.payload.sessionId,
     summary: message.payload.summary,
@@ -346,7 +346,7 @@ async function handleSummarizeUpdate(message: Extract<EchoMessage, { type: 'echo
   return session;
 }
 
-async function handleRewriteUpdate(message: Extract<EchoMessage, { type: 'echo/ai/rewrite' }>) {
+async function handleRewriteUpdate(message: Extract<EkkoMessage, { type: 'ekko/ai/rewrite' }>) {
   const sessions = await listSessions();
   const existing = message.payload.sessionId
     ? sessions.find((entry) => entry.id === message.payload.sessionId)
@@ -387,7 +387,7 @@ function sanitizeParagraphArray(value: unknown): string[] {
     .filter((entry) => entry.length > 0);
 }
 
-async function handleComposeUpdate(message: Extract<EchoMessage, { type: 'echo/ai/compose' }>) {
+async function handleComposeUpdate(message: Extract<EkkoMessage, { type: 'ekko/ai/compose' }>) {
   const sessions = await listSessions();
   const target = message.payload.sessionId
     ? sessions.find((entry) => entry.id === message.payload.sessionId)
@@ -503,9 +503,9 @@ async function applyDirectInsertPayload(payload: DirectInsertPayload, tabIdOverr
 
   const sendApplyMessage = () => {
     const message = {
-      type: 'echo/direct-insert/apply',
+      type: 'ekko/direct-insert/apply',
       payload: messagePayload
-    } satisfies EchoMessage;
+    } satisfies EkkoMessage;
 
     const frameId = directInsertFrameMap.get(tabId);
     const options = typeof frameId === 'number' ? { frameId } : undefined;
@@ -626,7 +626,7 @@ async function ensureDomInsertion(tabId: number, draft: ComposeDraftFields) {
           applySubject();
           applyBody();
         } catch (injectionError) {
-          console.warn('[Echo] Direct insert DOM fallback failed', injectionError);
+          console.warn('[Ekko] Direct insert DOM fallback failed', injectionError);
         }
       },
       args: [draft]
@@ -669,9 +669,9 @@ async function initializeDirectInsertState() {
 async function broadcastDirectInsertState(enabled: boolean) {
   try {
     await chrome.runtime.sendMessage({
-      type: 'echo/direct-insert/initialized',
+      type: 'ekko/direct-insert/initialized',
       payload: { enabled }
-    } satisfies EchoMessage);
+    } satisfies EkkoMessage);
   } catch {
     /* ignore */
   }
@@ -703,7 +703,7 @@ if (chrome.action?.onClicked) {
       return;
     }
     openSidePanel(target).catch((error) => {
-      console.warn('Unable to open Echo side panel from action click', error);
+      console.warn('Unable to open Ekko side panel from action click', error);
     });
   });
 }
@@ -720,8 +720,8 @@ chrome.commands.onCommand.addListener(async (command) => {
       await openSidePanelForActiveTab();
       break;
     case 'toggle-recording':
-      chrome.runtime.sendMessage<EchoMessage>({
-        type: 'echo/transcript/update',
+      chrome.runtime.sendMessage<EkkoMessage>({
+        type: 'ekko/transcript/update',
         payload: {
           transcript: '',
           origin: 'panel'
@@ -733,8 +733,8 @@ chrome.commands.onCommand.addListener(async (command) => {
   }
 });
 
-chrome.runtime.onMessage.addListener((message: EchoMessage, sender, sendResponse) => {
-  if (message.type === 'echo/sidepanel/state') {
+chrome.runtime.onMessage.addListener((message: EkkoMessage, sender, sendResponse) => {
+  if (message.type === 'ekko/sidepanel/state') {
     const open = !!message.payload?.open;
     const tabIdFromPayload =
       message.payload && typeof message.payload === 'object' && 'tabId' in message.payload
@@ -753,25 +753,25 @@ chrome.runtime.onMessage.addListener((message: EchoMessage, sender, sendResponse
           (sender.tab?.windowId !== undefined ? { windowId: sender.tab.windowId } : null);
 
     if (!target) {
-      sendResponse({ ok: false, error: 'Unable to determine side panel window.' } satisfies EchoResponse);
+      sendResponse({ ok: false, error: 'Unable to determine side panel window.' } satisfies EkkoResponse);
       return true;
     }
 
     setSidePanelState(target, open)
       .then(() => {
-        sendResponse({ ok: true } satisfies EchoResponse);
+        sendResponse({ ok: true } satisfies EkkoResponse);
       })
       .catch((error) => {
         const description = error instanceof Error ? error.message : 'Unable to update side panel state.';
-        sendResponse({ ok: false, error: description } satisfies EchoResponse);
+        sendResponse({ ok: false, error: description } satisfies EkkoResponse);
       });
     return true;
   }
 
-  if (message.type === 'echo/sidepanel/open') {
+  if (message.type === 'ekko/sidepanel/open') {
     const target = resolveSidePanelTargetFromSender(sender);
     if (!target) {
-      sendResponse({ ok: false, error: 'Unable to determine tab for side panel.' } satisfies EchoResponse);
+      sendResponse({ ok: false, error: 'Unable to determine tab for side panel.' } satisfies EkkoResponse);
       return true;
     }
 
@@ -827,10 +827,10 @@ chrome.runtime.onMessage.addListener((message: EchoMessage, sender, sendResponse
         sendResponse({
           ok: true,
           data: { state: resolvedAction === 'close' ? 'closed' : 'opened' }
-        } satisfies EchoResponse);
+        } satisfies EkkoResponse);
       } catch (error) {
         const description = error instanceof Error ? error.message : 'Unable to open settings.';
-        sendResponse({ ok: false, error: description } satisfies EchoResponse);
+        sendResponse({ ok: false, error: description } satisfies EkkoResponse);
       }
     })();
     return true;
@@ -839,17 +839,17 @@ chrome.runtime.onMessage.addListener((message: EchoMessage, sender, sendResponse
   (async () => {
     try {
       switch (message.type) {
-        case 'echo/direct-insert/toggle':
+        case 'ekko/direct-insert/toggle':
           await toggleDirectInsert(message.payload.enabled);
-          sendResponse({ ok: true } satisfies EchoResponse);
+          sendResponse({ ok: true } satisfies EkkoResponse);
           break;
-        case 'echo/direct-insert/query':
+        case 'ekko/direct-insert/query':
           sendResponse({
             ok: true,
             data: { enabled: directInsertEnabled }
-          } satisfies EchoResponse);
+          } satisfies EkkoResponse);
           break;
-        case 'echo/widget/insert': {
+        case 'ekko/widget/insert': {
           const tabId = sender.tab?.id;
           if (tabId === undefined) {
             sendResponse({ ok: false, error: 'No active tab found for insert request.' });
@@ -860,55 +860,55 @@ chrome.runtime.onMessage.addListener((message: EchoMessage, sender, sendResponse
               throw new Error('Missing draft payload.');
             }
             await applyDirectInsertPayload(message.payload, tabId);
-            sendResponse({ ok: true } satisfies EchoResponse);
+            sendResponse({ ok: true } satisfies EkkoResponse);
           } catch (error) {
             console.warn('Widget insert failed', error);
             const msg = error instanceof Error ? error.message : 'Compose failed.';
-            sendResponse({ ok: false, error: msg } satisfies EchoResponse);
+            sendResponse({ ok: false, error: msg } satisfies EkkoResponse);
           }
           break;
         }
-        case 'echo/direct-insert/focus':
+        case 'ekko/direct-insert/focus':
           if (sender.tab?.id !== undefined && typeof sender.frameId === 'number') {
             directInsertFrameMap.set(sender.tab.id, sender.frameId);
           }
-          sendResponse({ ok: true } satisfies EchoResponse);
+          sendResponse({ ok: true } satisfies EkkoResponse);
           break;
-        case 'echo/transcript/update': {
+        case 'ekko/transcript/update': {
           const session = await handleTranscriptUpdate(message);
-          sendResponse({ ok: true, data: session } satisfies EchoResponse);
+          sendResponse({ ok: true, data: session } satisfies EkkoResponse);
           break;
         }
-        case 'echo/ai/summarize': {
+        case 'ekko/ai/summarize': {
           const session = await handleSummarizeUpdate(message);
-          sendResponse({ ok: true, data: session } satisfies EchoResponse);
+          sendResponse({ ok: true, data: session } satisfies EkkoResponse);
           break;
         }
-        case 'echo/ai/rewrite': {
+        case 'ekko/ai/rewrite': {
           const session = await handleRewriteUpdate(message);
-          sendResponse({ ok: true, data: session } satisfies EchoResponse);
+          sendResponse({ ok: true, data: session } satisfies EkkoResponse);
           break;
         }
-        case 'echo/ai/compose': {
+        case 'ekko/ai/compose': {
           const session = await handleComposeUpdate(message);
-          sendResponse({ ok: true, data: session } satisfies EchoResponse);
+          sendResponse({ ok: true, data: session } satisfies EkkoResponse);
           break;
         }
-        case 'echo/direct-insert/apply': {
+        case 'ekko/direct-insert/apply': {
           await applyDirectInsertPayload(message.payload);
-          sendResponse({ ok: true } satisfies EchoResponse);
+          sendResponse({ ok: true } satisfies EkkoResponse);
           break;
         }
         default:
           sendResponse({
             ok: false,
-            error: `Unhandled message type: ${(message as EchoMessage).type}`
-          } satisfies EchoResponse);
+            error: `Unhandled message type: ${(message as EkkoMessage).type}`
+          } satisfies EkkoResponse);
       }
     } catch (error) {
       const description = error instanceof Error ? error.message : 'Unknown background error';
-      console.error('Echo background error', error);
-      sendResponse({ ok: false, error: description } satisfies EchoResponse);
+      console.error('Ekko background error', error);
+      sendResponse({ ok: false, error: description } satisfies EkkoResponse);
     }
   })();
   return true;

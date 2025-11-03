@@ -4,7 +4,7 @@ When you toggle “Direct Insert Mode” in the panel, we send a message to the 
 service worker:
 
 chrome.runtime.sendMessage({
-type: 'echo/direct-insert/toggle',
+type: 'ekko/direct-insert/toggle',
 payload: { enabled }
 });
 
@@ -12,7 +12,7 @@ While this mode is on we mirror every transcript update. The panel effect watche
 transcript and sends it to the background anytime it changes:
 
 chrome.runtime.sendMessage({
-type: 'echo/transcript/update',
+type: 'ekko/transcript/update',
 payload: { transcript, origin: 'panel' }
 });
 
@@ -37,12 +37,12 @@ The service worker coordinates everything.
     its focus listener.
 2. Tracking focus
 
-    Every frame that has an editable element in focus sends an echo/direct-insert/focus
+    Every frame that has an editable element in focus sends an ekko/direct-insert/focus
     message; the service worker records that frame ID in a directInsertFrameMap. That way,
     when new transcript text arrives we know exactly which frame currently owns the caret.
 3. Mirroring text
 
-    When the panel sends echo/transcript/update, the worker routes it to the most recently
+    When the panel sends ekko/transcript/update, the worker routes it to the most recently
     focused frame:
 
     chrome.tabs.sendMessage(tabId, message, { frameId });
@@ -51,11 +51,11 @@ The service worker coordinates everything.
     it can either cache the text (success) or retry (not yet focused/ready).
 4. Ad-hoc insert
 
-    The Compose “Insert into page” button uses a separate echo/direct-insert/apply message
+    The Compose “Insert into page” button uses a separate ekko/direct-insert/apply message
     with the text payload; we send that down the same frame-aware path.
 5. Query endpoint
 
-    Newly injected frames ask the background “is the bridge currently enabled?” via echo/
+    Newly injected frames ask the background “is the bridge currently enabled?” via ekko/
     direct-insert/query. The worker responds with { enabled: true/false } so the script can
     immediately hook up its listeners if the mode is on.
 
@@ -67,18 +67,18 @@ content/directInsert.js is what actually touches the page’s DOM.
 
 - One-time initialization
 
-Each frame checks window.__echoDirectInsertInjected__ to avoid duplicate loads. On load it:
-    1. Asks the background for the current toggle state (echo/direct-insert/query).
+Each frame checks window.__ekkoDirectInsertInjected__ to avoid duplicate loads. On load it:
+    1. Asks the background for the current toggle state (ekko/direct-insert/query).
     2. If the response says “enabled”, it installs a focusin listener.
 - Focus tracking
 
 Whenever an editable element gains focus, the script remembers that element and informs the
-background with echo/direct-insert/focus.
+background with ekko/direct-insert/focus.
 - Applying text
 
 It listens for two message types:
-    - echo/transcript/update → replace the entire value (used for live dictation).
-    - echo/direct-insert/apply → insert at the current caret position (used for Compose →
+    - ekko/transcript/update → replace the entire value (used for live dictation).
+    - ekko/direct-insert/apply → insert at the current caret position (used for Compose →
     “Insert into page”).
 
 The helper functions handle both <input>/<textarea> and contentEditable elements:

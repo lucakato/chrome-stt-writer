@@ -1,16 +1,16 @@
-import { EchoMessage, EchoResponse } from '@shared/messages';
+import { EkkoMessage, EkkoResponse } from '@shared/messages';
 import type { ComposeDraftFields } from '@shared/compose';
 
 declare global {
   interface Window {
-    __echoDirectInsertInjected__?: boolean;
+    __ekkoDirectInsertInjected__?: boolean;
   }
 }
 
-if (window.__echoDirectInsertInjected__) {
+if (window.__ekkoDirectInsertInjected__) {
   // Already injected in this document.
 } else {
-  window.__echoDirectInsertInjected__ = true;
+  window.__ekkoDirectInsertInjected__ = true;
 
   let directInsertEnabled = false;
   let lastEditable: HTMLElement | null = null;
@@ -21,7 +21,7 @@ if (window.__echoDirectInsertInjected__) {
     return runtimeHealthy && typeof chrome !== 'undefined' && !!chrome.runtime?.id;
   }
 
-  function safeSendMessage(message: EchoMessage) {
+  function safeSendMessage(message: EkkoMessage) {
     if (!isRuntimeAvailable()) {
       return undefined;
     }
@@ -31,9 +31,9 @@ if (window.__echoDirectInsertInjected__) {
       if (error instanceof Error && error.message.includes('Extension context invalidated')) {
         runtimeHealthy = false;
         disableListeners();
-        window.__echoDirectInsertInjected__ = false;
+        window.__ekkoDirectInsertInjected__ = false;
       }
-      console.warn('[Echo] Unable to send runtime message after reload', error);
+      console.warn('[Ekko] Unable to send runtime message after reload', error);
       return undefined;
     }
   }
@@ -154,7 +154,7 @@ if (window.__echoDirectInsertInjected__) {
     }
 
     lastEditable = target;
-    const pending = safeSendMessage({ type: 'echo/direct-insert/focus' } satisfies EchoMessage);
+    const pending = safeSendMessage({ type: 'ekko/direct-insert/focus' } satisfies EkkoMessage);
     if (pending && typeof (pending as Promise<unknown>).catch === 'function') {
       (pending as Promise<unknown>).catch(() => {
         /* ignore */
@@ -511,11 +511,11 @@ if (window.__echoDirectInsertInjected__) {
     lastEditable = null;
   }
 
-  chrome.runtime.onMessage.addListener((message: EchoMessage, _sender, sendResponse) => {
+  chrome.runtime.onMessage.addListener((message: EkkoMessage, _sender, sendResponse) => {
     let handled = false;
     let success = false;
     switch (message.type) {
-      case 'echo/direct-insert/toggle':
+      case 'ekko/direct-insert/toggle':
         directInsertEnabled = message.payload.enabled;
         if (directInsertEnabled) {
           enableListeners();
@@ -525,7 +525,7 @@ if (window.__echoDirectInsertInjected__) {
         handled = true;
         success = true;
         break;
-      case 'echo/direct-insert/apply':
+      case 'ekko/direct-insert/apply':
         handled = true;
         if (message.payload && typeof message.payload === 'object' && 'draft' in message.payload && message.payload.draft) {
           const draftPayload = message.payload.draft as ComposeDraftFields;
@@ -544,7 +544,7 @@ if (window.__echoDirectInsertInjected__) {
           success = false;
         }
         break;
-      case 'echo/transcript/update':
+      case 'ekko/transcript/update':
         if (!directInsertEnabled) {
           handled = true;
           success = false;
@@ -567,9 +567,9 @@ if (window.__echoDirectInsertInjected__) {
     return undefined;
   });
 
-  const bootstrap = safeSendMessage({ type: 'echo/direct-insert/query' } satisfies EchoMessage);
+  const bootstrap = safeSendMessage({ type: 'ekko/direct-insert/query' } satisfies EkkoMessage);
   if (bootstrap && typeof (bootstrap as Promise<unknown>).then === 'function') {
-    (bootstrap as Promise<EchoResponse | undefined>)
+    (bootstrap as Promise<EkkoResponse | undefined>)
       .then((response) => {
         if (!response || !response.ok || !response.data || typeof response.data !== 'object') {
           return;

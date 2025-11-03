@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useMicrophonePermission } from '@shared/hooks/useMicrophonePermission';
 import { useSpeechRecorder } from '@shared/hooks/useSpeechRecorder';
-import type { EchoMessage, EchoResponse } from '@shared/messages';
+import type { EkkoMessage, EkkoResponse } from '@shared/messages';
 import { readOnboardingState, updateOnboardingState } from '@shared/storage/onboarding';
 import {
   getRewriterAvailability,
@@ -27,11 +27,11 @@ import {
 } from '@shared/compose';
 import {
   DEFAULT_SETTINGS,
-  getEchoSettings,
-  observeEchoSettings,
-  setEchoSettings,
-  type EchoMode,
-  type EchoSettings
+  getEkkoSettings,
+  observeEkkoSettings,
+  setEkkoSettings,
+  type EkkoMode,
+  type EkkoSettings
 } from '@shared/settings';
 import { MdKeyboardVoice } from 'react-icons/md';
 import { LuAudioLines } from 'react-icons/lu';
@@ -50,7 +50,12 @@ type RewritePreset =
   | 'expand'
   | 'casual'
   | 'bullet'
+<<<<<<< Updated upstream
+  | 'action-items'
+  | 'custom';
+=======
   | 'shorten';
+>>>>>>> Stashed changes
 
 type MicVisualState = 'idle' | 'recording' | 'off';
 
@@ -60,6 +65,9 @@ function MicIcon({ state }: { state: MicVisualState }) {
   return <Icon size={20} aria-hidden="true" focusable="false" />;
 }
 
+<<<<<<< Updated upstream
+type ComposePresetId = 'freeform' | 'email-formal' | 'summary' | 'action-plan';
+=======
 type ComposePresetId =
   | 'freeform'
   | 'concise-formal'
@@ -67,6 +75,7 @@ type ComposePresetId =
   | 'casual'
   | 'bullet'
   | 'shorten';
+>>>>>>> Stashed changes
 
 type HistoryEntry = {
   id: string;
@@ -103,7 +112,12 @@ const rewritePresets: Array<{ id: RewritePreset; label: string }> = [
   { id: 'expand', label: 'Expand' },
   { id: 'casual', label: 'Casual' },
   { id: 'bullet', label: 'Bullet list' },
+<<<<<<< Updated upstream
+  { id: 'action-items', label: 'Action items' },
+  { id: 'custom', label: 'Custom instructions' }
+=======
   { id: 'shorten', label: 'Shorten' }
+>>>>>>> Stashed changes
 ];
 
 const composePresets: Array<{ id: ComposePresetId; label: string; systemPrompt: string; helper: string }> = [
@@ -112,42 +126,59 @@ const composePresets: Array<{ id: ComposePresetId; label: string; systemPrompt: 
     label: 'Freeform',
     helper: 'Great for open-ended questions or ideation.',
     systemPrompt:
-      'You are Echo, an on-device writing assistant. The user will dictate instructions about the message they need. Transform those instructions into the finished text, written from the user’s perspective. If the user mentions a recipient, address that person directly. Include any requested structure (such as lists or bullet points) inside the message. Never mention the instructions, never explain what you are doing, and do not add guidance or meta commentary—return only the final deliverable the user can send immediately.'
+      'You are Ekko, an on-device writing assistant. Listen carefully and return a direct, helpful answer the user can use immediately. Reply in the user’s language, keep it concise, and avoid meta commentary or extra instructions.'
   },
   {
+<<<<<<< Updated upstream
+    id: 'email-formal',
+    label: 'Formal email',
+    helper: 'Draft polished outreach or apology emails.',
+    systemPrompt:
+      'You help users draft formal, polite emails. Produce the finished email text (include a subject line and sign-off when appropriate). Provide only the email—do not add guidance or commentary.'
+  },
+  {
+    id: 'summary',
+    label: 'Summary',
+    helper: 'Turn thoughts into concise summaries.',
+    systemPrompt:
+      'You summarize the user’s spoken input into a concise digest. Present only the distilled summary in clear prose or bullet points, without extra advice or explanation.'
+  },
+  {
+    id: 'action-plan',
+    label: 'Action plan',
+    helper: 'Outline next steps with clarity.',
+    systemPrompt:
+      'You produce a clear action plan based on the user’s spoken intent. Return only the actionable steps (numbered or bullet list), keeping each step direct and free of meta commentary.'
+=======
     id: 'concise-formal',
     label: 'Formalize',
-    helper: 'Use when you need a polished, professional tone with clear structure.',
     systemPrompt:
       'You transform the user’s dictated instructions into a polished, fully formal message. Use precise, professional language, maintain a courteous tone, include a subject when relevant, and preserve the user’s intent. Return only the finished message with no guidance or meta commentary.'
   },
   {
     id: 'expand',
     label: 'Expand',
-    helper: 'Adds context and detail to flesh out your draft.',
     systemPrompt:
       'You elaborate on the user’s instructions to produce a fuller, more detailed response. Provide helpful context and supporting details while staying faithful to the user’s intent. Respond directly to the recipient without adding guidance about how to use the message.'
   },
   {
     id: 'casual',
     label: 'Casual',
-    helper: 'Keeps things lighthearted and conversational.',
     systemPrompt:
       'You write in a relaxed, friendly tone. Turn the user’s instructions into an approachable message that sounds natural in everyday conversation, addressed directly to the recipient. Avoid meta commentary or explanations.'
   },
   {
     id: 'bullet',
     label: 'Bullet list',
-    helper: 'Turns key points into a crisp, scannable list.',
     systemPrompt:
       'You return the final message as a concise bullet list that highlights the key points from the user’s instructions. Each bullet should be a complete, recipient-ready statement. Do not add prose outside the bullet list.'
   },
   {
     id: 'shorten',
     label: 'Shorten',
-    helper: 'Condenses your message while keeping the essentials.',
     systemPrompt:
       'You create a significantly shorter message that still communicates the critical information from the user’s instructions. Respond from the user’s perspective, address the recipient directly, and avoid any meta commentary.'
+>>>>>>> Stashed changes
   }
 ];
 
@@ -177,10 +208,19 @@ const rewritePresetConfig: Record<RewritePreset, RewritePresetConfig> = {
     context: 'Rewrite the text as a concise bullet list highlighting the key points.',
     format: 'bullet'
   },
-  shorten: {
+<<<<<<< Updated upstream
+  'action-items': {
     sharedContext: BASE_SHARED_CONTEXT,
-    context: 'Rewrite the text so it is significantly shorter while preserving key information and readability.',
-    length: 'shorter',
+    context: 'Rewrite the text as a list of clear action items with imperative verbs and owners where possible.',
+    format: 'plain-text',
+    tone: 'more-direct'
+  },
+  custom: {
+=======
+  shorten: {
+>>>>>>> Stashed changes
+    sharedContext: BASE_SHARED_CONTEXT,
+    context: 'Rewrite the text to improve clarity, flow, and readability while preserving the author’s intent.',
     format: 'plain-text'
   }
 };
@@ -229,7 +269,7 @@ function formatDuration(ms: number) {
 
 export default function App() {
   const { status: micStatus, requestPermission, error: micError } = useMicrophonePermission();
-  const [settings, setSettings] = useState<EchoSettings>(DEFAULT_SETTINGS);
+  const [settings, setSettings] = useState<EkkoSettings>(DEFAULT_SETTINGS);
   const [settingsReady, setSettingsReady] = useState(false);
 
   const [transcript, setTranscript] = useState('');
@@ -287,8 +327,8 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
     }
     try {
       const response = (await chrome.runtime.sendMessage({
-        type: 'echo/direct-insert/query'
-      } satisfies EchoMessage)) as EchoResponse | undefined;
+        type: 'ekko/direct-insert/query'
+      } satisfies EkkoMessage)) as EkkoResponse | undefined;
       if (response && response.ok && response.data && typeof response.data === 'object') {
         const enabled = !!(response.data as { enabled?: boolean }).enabled;
         setDirectInsertEnabled(enabled);
@@ -302,9 +342,9 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
     const sendState = (open: boolean, tabId?: number, windowId?: number) => {
       chrome.runtime
         ?.sendMessage({
-          type: 'echo/sidepanel/state',
+          type: 'ekko/sidepanel/state',
           payload: { open, tabId, windowId }
-        } satisfies EchoMessage)
+        } satisfies EkkoMessage)
         .catch(() => {});
     };
 
@@ -339,17 +379,17 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
   useEffect(() => {
     let active = true;
 
-    getEchoSettings()
+    getEkkoSettings()
       .then((value) => {
         if (!active) return;
         setSettings(value);
         setSettingsReady(true);
       })
       .catch((error) => {
-        console.warn('Unable to load Echo settings', error);
+        console.warn('Unable to load Ekko settings', error);
       });
 
-    const dispose = observeEchoSettings((value, changed) => {
+    const dispose = observeEkkoSettings((value, changed) => {
       setSettings((prev) => ({
         floatingWidgetEnabled: changed.floatingWidgetEnabled ? value.floatingWidgetEnabled : prev.floatingWidgetEnabled,
         mode: changed.mode ? value.mode : prev.mode,
@@ -364,11 +404,11 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
     };
   }, []);
 
-  const applySettings = useCallback((partial: Partial<EchoSettings>) => {
+  const applySettings = useCallback((partial: Partial<EkkoSettings>) => {
     setSettings((prev) => {
       const optimistic = { ...prev, ...partial };
-      setEchoSettings(partial).catch((error) => {
-        console.warn('Unable to update Echo settings', error);
+      setEkkoSettings(partial).catch((error) => {
+        console.warn('Unable to update Ekko settings', error);
         setSettings(prev);
       });
       return optimistic;
@@ -635,14 +675,14 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
 
       chrome.runtime
         ?.sendMessage({
-          type: 'echo/ai/summarize',
+          type: 'ekko/ai/summarize',
           payload: {
             sessionId: activeSessionIdRef.current ?? undefined,
             transcript: activeTranscript,
             summary: result.content
           }
-        } satisfies EchoMessage)
-        .then((response: EchoResponse | undefined) => {
+        } satisfies EkkoMessage)
+        .then((response: EkkoResponse | undefined) => {
           if (response?.ok && response.data && typeof response.data === 'object') {
             const { id } = response.data as { id?: string };
             if (typeof id === 'string') {
@@ -753,15 +793,15 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
 
       chrome.runtime
         ?.sendMessage({
-          type: 'echo/ai/rewrite',
+          type: 'ekko/ai/rewrite',
           payload: {
             sessionId: activeSessionIdRef.current ?? undefined,
             preset: rewritePreset,
             transcript: activeTranscript,
             rewrite: result.content
           }
-        } satisfies EchoMessage)
-        .then((response: EchoResponse | undefined) => {
+        } satisfies EkkoMessage)
+        .then((response: EkkoResponse | undefined) => {
           if (response?.ok && response.data && typeof response.data === 'object') {
             const { id } = response.data as { id?: string };
             if (typeof id === 'string') {
@@ -819,7 +859,7 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
       throw new Error('Chrome runtime unavailable for direct insert.');
     }
     await runtime.sendMessage({
-      type: 'echo/direct-insert/apply',
+      type: 'ekko/direct-insert/apply',
       payload: {
         draft: {
           content: normalized.content,
@@ -827,7 +867,7 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
           paragraphs: normalized.paragraphs
         }
       }
-    } satisfies EchoMessage);
+    } satisfies EkkoMessage);
     return true;
   }, []);
 
@@ -848,9 +888,9 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
 
       if (options.skipStructuring) {
         await runtime.sendMessage({
-          type: 'echo/direct-insert/apply',
+          type: 'ekko/direct-insert/apply',
           payload: { text: trimmed }
-        } satisfies EchoMessage);
+        } satisfies EkkoMessage);
         return true;
       }
 
@@ -890,9 +930,9 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
       }
       const response = await runtime
         .sendMessage({
-          type: 'echo/direct-insert/toggle',
+          type: 'ekko/direct-insert/toggle',
           payload: { enabled }
-        } satisfies EchoMessage)
+        } satisfies EkkoMessage)
         .catch((error) => {
           console.warn('Unable to toggle direct insert bridge', error);
           throw error;
@@ -1062,7 +1102,7 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
     async (audioBuffer: ArrayBuffer) => {
       const preset = activeComposePreset;
       const instructions = composePrompt.trim();
-      console.info('[Echo] side panel instruction:', instructions);
+      console.info('[Ekko] side panel instruction:', instructions);
       const systemPrompt = instructions
         ? `${preset.systemPrompt}\n\nFollow these additional instructions exactly:\n${instructions}`
         : preset.systemPrompt;
@@ -1171,7 +1211,7 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
 
         chrome.runtime
           ?.sendMessage({
-            type: 'echo/ai/compose',
+            type: 'ekko/ai/compose',
               payload: {
                 sessionId: undefined,
                 preset: preset.id,
@@ -1183,8 +1223,8 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
                   paragraphs: normalizedDraft.paragraphs
                 }
               }
-          } satisfies EchoMessage)
-          .then((response: EchoResponse | undefined) => {
+          } satisfies EkkoMessage)
+          .then((response: EkkoResponse | undefined) => {
             if (response?.ok && response.data && typeof response.data === 'object') {
               const { id } = response.data as { id?: string };
               if (typeof id === 'string') {
@@ -1405,9 +1445,9 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
 
     chrome.runtime
       ?.sendMessage({
-        type: 'echo/direct-insert/apply',
+        type: 'ekko/direct-insert/apply',
         payload: { draft: payload }
-      } satisfies EchoMessage)
+      } satisfies EkkoMessage)
       .catch((error: unknown) => {
         console.warn('Unable to insert compose draft into active field', error);
       });
@@ -1426,8 +1466,8 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
     setDirectInsertEnabled(false);
 
     chrome.runtime
-      ?.sendMessage({ type: 'echo/direct-insert/query' } satisfies EchoMessage)
-      .then((response: EchoResponse | undefined) => {
+      ?.sendMessage({ type: 'ekko/direct-insert/query' } satisfies EkkoMessage)
+      .then((response: EkkoResponse | undefined) => {
         if (cancelled || !response || !response.ok || !response.data) {
           return;
         }
@@ -1438,8 +1478,8 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
         /* ignore: we will rely on initialized event */
       });
 
-    const handleInitMessage = (message: EchoMessage) => {
-      if (message.type === 'echo/direct-insert/initialized' && !cancelled) {
+    const handleInitMessage = (message: EkkoMessage) => {
+      if (message.type === 'ekko/direct-insert/initialized' && !cancelled) {
         const enabled = !!message.payload?.enabled;
         setDirectInsertEnabled(enabled);
       }
@@ -1565,13 +1605,13 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
 
       chrome.runtime
         ?.sendMessage({
-          type: 'echo/transcript/update',
+          type: 'ekko/transcript/update',
           payload: {
             transcript: text,
             origin: 'panel'
           }
-        } satisfies EchoMessage)
-        .then((response: EchoResponse | undefined) => {
+        } satisfies EkkoMessage)
+        .then((response: EkkoResponse | undefined) => {
           if (cancelled || !directInsertEnabled) {
             return;
           }
@@ -1694,12 +1734,12 @@ const composeSessionPromiseRef = useRef<Promise<LanguageModelSession> | null>(nu
       <header className="app__header">
         <div className="app__headline">
           <div className="brand" aria-live="polite">
-            <span className="brand__title">Echo: Write with Voice</span>
+            <span className="brand__title">Ekko: Write with Voice</span>
             <span className="brand__subtitle">Capture or compose with on-device AI.</span>
           </div>
           <span className="pill pill--muted">Chrome {chromeVersion}</span>
         </div>
-        <div className="mode-switch" role="tablist" aria-label="Echo modes">
+        <div className="mode-switch" role="tablist" aria-label="Ekko modes">
           <button
             type="button"
             role="tab"
