@@ -16,7 +16,13 @@ An experimental Chrome extension that captures speech, transcribes with the Web 
   - `ChromeAIRewriter`
   - `AIPromptAPIMultimodalInput`
 
-  Replace the `__REPLACE_WITH_*` placeholders in `public/manifest.json` with the enrolled tokens from the [Chrome Origin Trials dashboard](https://developer.chrome.com/origintrials).
+  To activate them:
+  1. Visit the [Chrome Origin Trials dashboard](https://developer.chrome.com/origintrials/), sign in, and locate the **Prompt API** and **Rewriter API** trials.
+  2. Register each trial for your extension’s origin. When you load the project unpacked Chrome generates an ID (shown on `chrome://extensions`); use that `chrome-extension://<extension-id>` origin when you enroll.
+  3. Copy the generated token strings and **replace the placeholders `__REPLACE_WITH_REWRITER_ORIGIN_TRIAL_TOKEN__` and `__REPLACE_WITH_PROMPT_MULTIMODAL_TRIAL_TOKEN__` in `public/manifest.json`**.
+  4. Build (**npm run build**) or reload the extension so Chrome reads the updated manifest.
+
+  Origin trial tokens are bound to an origin. The tokens included in a packaged release only work for the published extension ID. Anyone cloning or forking the repository must request their own tokens and update the manifest before the Prompt and Rewriter APIs will initialize.
 
 ## Install and Build
 
@@ -57,7 +63,7 @@ The extension requests audio access when you hit **Record**.
 
 If the compose or rewrite flows report that an API is unavailable:
 
-- Keep Chrome open while the Prompt API or Rewriter API downloads (shown in `chrome://components`).
+- Keep Chrome open while the Prompt API or Rewriter API downloads.
 - Confirm the origin trial tokens in `public/manifest.json` have not expired and match the extension ID/domain you are running.
 - Ensure you are using a Chrome build that supports on-device AI (currently limited to select hardware configurations).
 
