@@ -9,8 +9,9 @@ An experimental Chrome extension that captures speech, transcribes with the Web 
 - Google Chrome 138 or newer (Dev/Canary builds work best for on-device AI features).
 - On-device **Prompt API**, **Rewriter API**, and **Web Speech API** components installed:
   1. Open `chrome://flags`, search for “Prompt API for developers” and “Chrome AI Rewriter”, set both to **Enabled**, and relaunch Chrome.
-  2. Visit `chrome://components`, locate the *Prompt API* and *Chrome AI Rewriter* entries, and click **Check for update** so the on-device models download.
-  3. The Web Speech API ships with Chrome; ensure any OS-level microphone privacy controls allow Chrome to record audio.
+  2. Visit `https://developer.chrome.com/origintrials/#/trials/active` and make sure Prompt API, Rewriter API are **enabled**.
+  3. Visit `chrome://on-device-internals/`, make sure **under Model Status, 'Foundational model state' set to 'Ready' and version exists for PromptAPi, WritingAssistanceApi**.
+  4. The Web Speech API ships with Chrome; ensure any OS-level microphone privacy controls allow Chrome to record audio.
 - Two active origin trial tokens:
   - `ChromeAIRewriter`
   - `AIPromptAPIMultimodalInput`
