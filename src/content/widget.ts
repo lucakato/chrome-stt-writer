@@ -54,12 +54,8 @@ type WidgetRewritePreset =
   | 'expand'
   | 'casual'
   | 'bullet'
-<<<<<<< Updated upstream
   | 'action-items'
   | 'custom';
-=======
-  | 'shorten';
->>>>>>> Stashed changes
 
 type WidgetRewriteConfig = {
   sharedContext?: string;
@@ -79,11 +75,10 @@ const WIDGET_REWRITE_OPTIONS: Array<{
 }> = [
   {
     id: 'concise-formal',
-    label: 'Formalize',
+    label: 'Concise • Formal',
     config: {
       sharedContext: WIDGET_BASE_SHARED_CONTEXT,
-      context:
-        'Rewrite the text into a polished, formal version suitable for professional communication while preserving meaning.',
+      context: 'Rewrite the text to be concise, professional, and suitable for business communication.',
       tone: 'more-formal',
       length: 'shorter',
       format: 'plain-text'
@@ -119,7 +114,6 @@ const WIDGET_REWRITE_OPTIONS: Array<{
     }
   },
   {
-<<<<<<< Updated upstream
     id: 'action-items',
     label: 'Action items',
     config: {
@@ -132,10 +126,6 @@ const WIDGET_REWRITE_OPTIONS: Array<{
   {
     id: 'custom',
     label: 'Custom instructions',
-=======
-    id: 'shorten',
-    label: 'Shorten',
->>>>>>> Stashed changes
     config: {
       sharedContext: WIDGET_BASE_SHARED_CONTEXT,
       context: 'Rewrite the text to improve clarity, flow, and readability while preserving the author’s intent.',
