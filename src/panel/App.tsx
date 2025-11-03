@@ -316,7 +316,7 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
     }
     try {
       const response = (await chrome.runtime.sendMessage({
-        type: 'ekko/direct-insert/query'
+        type: 'echo/direct-insert/query'
       } satisfies EchoMessage)) as EchoResponse | undefined;
       if (response && response.ok && response.data && typeof response.data === 'object') {
         const enabled = !!(response.data as { enabled?: boolean }).enabled;
@@ -331,7 +331,7 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
     const sendState = (open: boolean, tabId?: number, windowId?: number) => {
       chrome.runtime
         ?.sendMessage({
-          type: 'ekko/sidepanel/state',
+          type: 'echo/sidepanel/state',
           payload: { open, tabId, windowId }
         } satisfies EchoMessage)
         .catch(() => {});
@@ -825,7 +825,7 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
 
       chrome.runtime
         ?.sendMessage({
-          type: 'ekko/ai/summarize',
+          type: 'echo/ai/summarize',
           payload: {
             sessionId: activeSessionIdRef.current ?? undefined,
             transcript: activeTranscript,
@@ -952,7 +952,7 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
 
       chrome.runtime
         ?.sendMessage({
-          type: 'ekko/ai/rewrite',
+          type: 'echo/ai/rewrite',
           payload: {
             sessionId: activeSessionIdRef.current ?? undefined,
             preset: rewritePreset,
@@ -1018,7 +1018,7 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
       throw new Error('Chrome runtime unavailable for direct insert.');
     }
     await runtime.sendMessage({
-      type: 'ekko/direct-insert/apply',
+      type: 'echo/direct-insert/apply',
       payload: {
         draft: {
           content: normalized.content,
@@ -1047,7 +1047,7 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
 
       if (options.skipStructuring) {
         await runtime.sendMessage({
-          type: 'ekko/direct-insert/apply',
+          type: 'echo/direct-insert/apply',
           payload: { text: trimmed }
         } satisfies EchoMessage);
         return true;
@@ -1089,7 +1089,7 @@ const promptAvailabilityMessageRef = useRef<string | null>(promptAvailabilityMes
       }
       const response = await runtime
         .sendMessage({
-          type: 'ekko/direct-insert/toggle',
+          type: 'echo/direct-insert/toggle',
           payload: { enabled }
         } satisfies EchoMessage)
         .catch((error) => {
@@ -1557,7 +1557,7 @@ const runCompose = useCallback(
 
         chrome.runtime
           ?.sendMessage({
-            type: 'ekko/ai/compose',
+            type: 'echo/ai/compose',
               payload: {
                 sessionId: undefined,
                 preset: preset.id,
@@ -2092,7 +2092,7 @@ const runCompose = useCallback(
 
     chrome.runtime
       ?.sendMessage({
-        type: 'ekko/direct-insert/apply',
+        type: 'echo/direct-insert/apply',
         payload: { draft: payload }
       } satisfies EchoMessage)
       .catch((error: unknown) => {
@@ -2113,7 +2113,7 @@ const runCompose = useCallback(
     setDirectInsertEnabled(false);
 
     chrome.runtime
-      ?.sendMessage({ type: 'ekko/direct-insert/query' } satisfies EchoMessage)
+      ?.sendMessage({ type: 'echo/direct-insert/query' } satisfies EchoMessage)
       .then((response: EchoResponse | undefined) => {
         if (cancelled || !response || !response.ok || !response.data) {
           return;
@@ -2126,7 +2126,7 @@ const runCompose = useCallback(
       });
 
     const handleInitMessage = (message: EchoMessage) => {
-      if (message.type === 'ekko/direct-insert/initialized' && !cancelled) {
+      if (message.type === 'echo/direct-insert/initialized' && !cancelled) {
         const enabled = !!message.payload?.enabled;
         setDirectInsertEnabled(enabled);
       }
@@ -2262,7 +2262,7 @@ const runCompose = useCallback(
 
       chrome.runtime
         ?.sendMessage({
-          type: 'ekko/transcript/update',
+          type: 'echo/transcript/update',
           payload: {
             transcript: text,
             origin: 'panel'

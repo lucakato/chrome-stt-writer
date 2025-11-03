@@ -6,9 +6,9 @@ export type EchoSettings = {
   composePrompt: string;
 };
 
-const WIDGET_KEY = 'ekko:floatingWidgetEnabled';
-const MODE_KEY = 'ekko:mode';
-const PROMPT_KEY = 'ekko:composePrompt';
+const WIDGET_KEY = 'echo:floatingWidgetEnabled';
+const MODE_KEY = 'echo:mode';
+const PROMPT_KEY = 'echo:composePrompt';
 
 export const DEFAULT_SETTINGS: EchoSettings = {
   floatingWidgetEnabled: true,

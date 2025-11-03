@@ -1,12 +1,12 @@
 import { DirectInsertPayload, EchoMessage, EchoResponse } from '@shared/messages';
 import { ComposeDraftFields, deriveParagraphs, joinParagraphs } from '@shared/compose';
 import { listSessions, upsertTranscript } from '@shared/storage';
-const DIRECT_INSERT_SCRIPT_ID = 'ekko-direct-insert-script';
-const DIRECT_INSERT_STORAGE_KEY = 'ekko:directInsertEnabled';
+const DIRECT_INSERT_SCRIPT_ID = 'echo-direct-insert-script';
+const DIRECT_INSERT_STORAGE_KEY = 'echo:directInsertEnabled';
 let directInsertEnabled = true;
 const directInsertFrameMap = new Map<number, number>();
 const sidePanelState = new Map<string, boolean>();
-const SIDE_PANEL_STATE_KEY = 'ekko:sidepanel:state';
+const SIDE_PANEL_STATE_KEY = 'echo:sidepanel:state';
 
 type SidePanelTarget = { tabId?: number; windowId?: number };
 
@@ -265,7 +265,7 @@ async function toggleDirectInsert(enabled: boolean) {
     const options = typeof frameId === 'number' ? { frameId } : undefined;
     await chrome.tabs
       .sendMessage(tabId, {
-        type: 'ekko/direct-insert/toggle',
+        type: 'echo/direct-insert/toggle',
         payload: { enabled }
       } satisfies EchoMessage, options)
       .catch(() => {
@@ -289,7 +289,7 @@ async function toggleDirectInsert(enabled: boolean) {
 
 async function restoreCaretForTab(tabId: number): Promise<boolean> {
   const message = {
-    type: 'ekko/direct-insert/restore'
+    type: 'echo/direct-insert/restore'
   } satisfies EchoMessage;
 
   const frameId = directInsertFrameMap.get(tabId);
@@ -308,9 +308,9 @@ async function restoreCaretForTab(tabId: number): Promise<boolean> {
 }
 
 async function handleTranscriptUpdate(
-  message: Extract<EchoMessage, { type: 'ekko/transcript/update' }>
+  message: Extract<EchoMessage, { type: 'echo/transcript/update' }>
 ) {
-  if (message.type !== 'ekko/transcript/update') {
+  if (message.type !== 'echo/transcript/update') {
     return { session: null, delivered: false };
   }
 
@@ -331,7 +331,7 @@ async function handleTranscriptUpdate(
   const frameId = directInsertFrameMap.get(tabId);
   await restoreCaretForTab(tabId);
   const messageToSend = {
-    type: 'ekko/transcript/update',
+    type: 'echo/transcript/update',
     payload: {
       transcript: session.transcript,
       origin: 'panel'
@@ -357,7 +357,7 @@ async function handleTranscriptUpdate(
   return { session, delivered };
 }
 
-async function handleSummarizeUpdate(message: Extract<EchoMessage, { type: 'ekko/ai/summarize' }>) {
+async function handleSummarizeUpdate(message: Extract<EchoMessage, { type: 'echo/ai/summarize' }>) {
   const session = await upsertTranscript(message.payload.transcript, {
     id: message.payload.sessionId,
     summary: message.payload.summary,
@@ -367,7 +367,7 @@ async function handleSummarizeUpdate(message: Extract<EchoMessage, { type: 'ekko
   return session;
 }
 
-async function handleRewriteUpdate(message: Extract<EchoMessage, { type: 'ekko/ai/rewrite' }>) {
+async function handleRewriteUpdate(message: Extract<EchoMessage, { type: 'echo/ai/rewrite' }>) {
   const sessions = await listSessions();
   const existing = message.payload.sessionId
     ? sessions.find((entry) => entry.id === message.payload.sessionId)
@@ -408,7 +408,7 @@ function sanitizeParagraphArray(value: unknown): string[] {
     .filter((entry) => entry.length > 0);
 }
 
-async function handleComposeUpdate(message: Extract<EchoMessage, { type: 'ekko/ai/compose' }>) {
+async function handleComposeUpdate(message: Extract<EchoMessage, { type: 'echo/ai/compose' }>) {
   const sessions = await listSessions();
   const target = message.payload.sessionId
     ? sessions.find((entry) => entry.id === message.payload.sessionId)
@@ -526,7 +526,7 @@ async function applyDirectInsertPayload(payload: DirectInsertPayload, tabIdOverr
 
   const sendApplyMessage = () => {
     const message = {
-      type: 'ekko/direct-insert/apply',
+      type: 'echo/direct-insert/apply',
       payload: messagePayload
     } satisfies EchoMessage;
 
@@ -693,7 +693,7 @@ async function initializeDirectInsertState() {
 async function broadcastDirectInsertState(enabled: boolean) {
   try {
     await chrome.runtime.sendMessage({
-      type: 'ekko/direct-insert/initialized',
+      type: 'echo/direct-insert/initialized',
       payload: { enabled }
     } satisfies EchoMessage);
   } catch {
@@ -745,7 +745,7 @@ chrome.commands.onCommand.addListener(async (command) => {
       break;
     case 'toggle-recording':
       chrome.runtime.sendMessage<EchoMessage>({
-        type: 'ekko/transcript/update',
+        type: 'echo/transcript/update',
         payload: {
           transcript: '',
           origin: 'panel'
@@ -758,7 +758,7 @@ chrome.commands.onCommand.addListener(async (command) => {
 });
 
 chrome.runtime.onMessage.addListener((message: EchoMessage, sender, sendResponse) => {
-  if (message.type === 'ekko/sidepanel/state') {
+  if (message.type === 'echo/sidepanel/state') {
     const open = !!message.payload?.open;
     const tabIdFromPayload =
       message.payload && typeof message.payload === 'object' && 'tabId' in message.payload
@@ -792,7 +792,7 @@ chrome.runtime.onMessage.addListener((message: EchoMessage, sender, sendResponse
     return true;
   }
 
-  if (message.type === 'ekko/sidepanel/open') {
+  if (message.type === 'echo/sidepanel/open') {
     const target = resolveSidePanelTargetFromSender(sender);
     if (!target) {
       sendResponse({ ok: false, error: 'Unable to determine tab for side panel.' } satisfies EchoResponse);
@@ -863,17 +863,17 @@ chrome.runtime.onMessage.addListener((message: EchoMessage, sender, sendResponse
   (async () => {
     try {
       switch (message.type) {
-        case 'ekko/direct-insert/toggle':
+        case 'echo/direct-insert/toggle':
           await toggleDirectInsert(message.payload.enabled);
           sendResponse({ ok: true } satisfies EchoResponse);
           break;
-        case 'ekko/direct-insert/query':
+        case 'echo/direct-insert/query':
           sendResponse({
             ok: true,
             data: { enabled: directInsertEnabled }
           } satisfies EchoResponse);
           break;
-        case 'ekko/widget/insert': {
+        case 'echo/widget/insert': {
           const tabId = sender.tab?.id;
           if (tabId === undefined) {
             sendResponse({ ok: false, error: 'No active tab found for insert request.' });
@@ -892,33 +892,33 @@ chrome.runtime.onMessage.addListener((message: EchoMessage, sender, sendResponse
           }
           break;
         }
-        case 'ekko/direct-insert/focus':
+        case 'echo/direct-insert/focus':
           if (sender.tab?.id !== undefined && typeof sender.frameId === 'number') {
             directInsertFrameMap.set(sender.tab.id, sender.frameId);
           }
           sendResponse({ ok: true } satisfies EchoResponse);
           break;
-        case 'ekko/transcript/update': {
+        case 'echo/transcript/update': {
           const session = await handleTranscriptUpdate(message);
           sendResponse({ ok: true, data: session } satisfies EchoResponse);
           break;
         }
-        case 'ekko/ai/summarize': {
+        case 'echo/ai/summarize': {
           const session = await handleSummarizeUpdate(message);
           sendResponse({ ok: true, data: session } satisfies EchoResponse);
           break;
         }
-        case 'ekko/ai/rewrite': {
+        case 'echo/ai/rewrite': {
           const session = await handleRewriteUpdate(message);
           sendResponse({ ok: true, data: session } satisfies EchoResponse);
           break;
         }
-        case 'ekko/ai/compose': {
+        case 'echo/ai/compose': {
           const session = await handleComposeUpdate(message);
           sendResponse({ ok: true, data: session } satisfies EchoResponse);
           break;
         }
-        case 'ekko/direct-insert/apply': {
+        case 'echo/direct-insert/apply': {
           await applyDirectInsertPayload(message.payload);
           sendResponse({ ok: true } satisfies EchoResponse);
           break;
