@@ -50,8 +50,12 @@ type RewritePreset =
   | 'expand'
   | 'casual'
   | 'bullet'
+<<<<<<< Updated upstream
   | 'action-items'
   | 'custom';
+=======
+  | 'shorten';
+>>>>>>> Stashed changes
 
 type MicVisualState = 'idle' | 'recording' | 'off';
 
@@ -61,7 +65,17 @@ function MicIcon({ state }: { state: MicVisualState }) {
   return <Icon size={20} aria-hidden="true" focusable="false" />;
 }
 
+<<<<<<< Updated upstream
 type ComposePresetId = 'freeform' | 'email-formal' | 'summary' | 'action-plan';
+=======
+type ComposePresetId =
+  | 'freeform'
+  | 'concise-formal'
+  | 'expand'
+  | 'casual'
+  | 'bullet'
+  | 'shorten';
+>>>>>>> Stashed changes
 
 type HistoryEntry = {
   id: string;
@@ -72,7 +86,7 @@ type HistoryEntry = {
   rewrite?: string;
   compose?: {
     presetId: ComposePresetId;
-   presetLabel: string;
+    presetLabel: string;
     instructions?: string;
     output: string;
     subject?: string;
@@ -94,12 +108,16 @@ const BASE_SHARED_CONTEXT =
 const COMPOSE_MAX_DURATION_MS = 90_000;
 
 const rewritePresets: Array<{ id: RewritePreset; label: string }> = [
-  { id: 'concise-formal', label: 'Concise • Formal' },
+  { id: 'concise-formal', label: 'Formalize' },
   { id: 'expand', label: 'Expand' },
   { id: 'casual', label: 'Casual' },
   { id: 'bullet', label: 'Bullet list' },
+<<<<<<< Updated upstream
   { id: 'action-items', label: 'Action items' },
   { id: 'custom', label: 'Custom instructions' }
+=======
+  { id: 'shorten', label: 'Shorten' }
+>>>>>>> Stashed changes
 ];
 
 const composePresets: Array<{ id: ComposePresetId; label: string; systemPrompt: string; helper: string }> = [
@@ -111,6 +129,7 @@ const composePresets: Array<{ id: ComposePresetId; label: string; systemPrompt: 
       'You are Ekko, an on-device writing assistant. Listen carefully and return a direct, helpful answer the user can use immediately. Reply in the user’s language, keep it concise, and avoid meta commentary or extra instructions.'
   },
   {
+<<<<<<< Updated upstream
     id: 'email-formal',
     label: 'Formal email',
     helper: 'Draft polished outreach or apology emails.',
@@ -130,13 +149,44 @@ const composePresets: Array<{ id: ComposePresetId; label: string; systemPrompt: 
     helper: 'Outline next steps with clarity.',
     systemPrompt:
       'You produce a clear action plan based on the user’s spoken intent. Return only the actionable steps (numbered or bullet list), keeping each step direct and free of meta commentary.'
+=======
+    id: 'concise-formal',
+    label: 'Formalize',
+    systemPrompt:
+      'You transform the user’s dictated instructions into a polished, fully formal message. Use precise, professional language, maintain a courteous tone, include a subject when relevant, and preserve the user’s intent. Return only the finished message with no guidance or meta commentary.'
+  },
+  {
+    id: 'expand',
+    label: 'Expand',
+    systemPrompt:
+      'You elaborate on the user’s instructions to produce a fuller, more detailed response. Provide helpful context and supporting details while staying faithful to the user’s intent. Respond directly to the recipient without adding guidance about how to use the message.'
+  },
+  {
+    id: 'casual',
+    label: 'Casual',
+    systemPrompt:
+      'You write in a relaxed, friendly tone. Turn the user’s instructions into an approachable message that sounds natural in everyday conversation, addressed directly to the recipient. Avoid meta commentary or explanations.'
+  },
+  {
+    id: 'bullet',
+    label: 'Bullet list',
+    systemPrompt:
+      'You return the final message as a concise bullet list that highlights the key points from the user’s instructions. Each bullet should be a complete, recipient-ready statement. Do not add prose outside the bullet list.'
+  },
+  {
+    id: 'shorten',
+    label: 'Shorten',
+    systemPrompt:
+      'You create a significantly shorter message that still communicates the critical information from the user’s instructions. Respond from the user’s perspective, address the recipient directly, and avoid any meta commentary.'
+>>>>>>> Stashed changes
   }
 ];
 
 const rewritePresetConfig: Record<RewritePreset, RewritePresetConfig> = {
   'concise-formal': {
     sharedContext: BASE_SHARED_CONTEXT,
-    context: 'Rewrite the text to be concise, professional, and suitable for business communication.',
+    context:
+      'Rewrite the text into a polished, formal version suitable for professional communication while preserving meaning.',
     tone: 'more-formal',
     length: 'shorter',
     format: 'plain-text'
@@ -158,6 +208,7 @@ const rewritePresetConfig: Record<RewritePreset, RewritePresetConfig> = {
     context: 'Rewrite the text as a concise bullet list highlighting the key points.',
     format: 'bullet'
   },
+<<<<<<< Updated upstream
   'action-items': {
     sharedContext: BASE_SHARED_CONTEXT,
     context: 'Rewrite the text as a list of clear action items with imperative verbs and owners where possible.',
@@ -165,6 +216,9 @@ const rewritePresetConfig: Record<RewritePreset, RewritePresetConfig> = {
     tone: 'more-direct'
   },
   custom: {
+=======
+  shorten: {
+>>>>>>> Stashed changes
     sharedContext: BASE_SHARED_CONTEXT,
     context: 'Rewrite the text to improve clarity, flow, and readability while preserving the author’s intent.',
     format: 'plain-text'
