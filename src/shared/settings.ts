@@ -17,15 +17,11 @@ export const DEFAULT_SETTINGS: EchoSettings = {
 };
 
 export async function getEchoSettings(): Promise<EchoSettings> {
-  const [widget, mode, prompt] = await Promise.all([
-    chrome.storage.local.get(WIDGET_KEY),
-    chrome.storage.local.get(MODE_KEY),
-    chrome.storage.local.get(PROMPT_KEY)
-  ]);
+  const record = await chrome.storage.local.get([WIDGET_KEY, MODE_KEY, PROMPT_KEY]);
 
-  const floatingWidgetEnabled = widget[WIDGET_KEY];
-  const storedMode = mode[MODE_KEY];
-  const storedPrompt = prompt[PROMPT_KEY];
+  const floatingWidgetEnabled = record[WIDGET_KEY];
+  const storedMode = record[MODE_KEY];
+  const storedPrompt = record[PROMPT_KEY];
 
   return {
     floatingWidgetEnabled:
@@ -36,21 +32,23 @@ export async function getEchoSettings(): Promise<EchoSettings> {
 }
 
 export async function setEchoSettings(partial: Partial<EchoSettings>): Promise<EchoSettings> {
-  const tasks: Promise<unknown>[] = [];
+  const updates: Record<string, EchoSettings[keyof EchoSettings]> = {};
 
   if (partial.floatingWidgetEnabled !== undefined) {
-    tasks.push(chrome.storage.local.set({ [WIDGET_KEY]: partial.floatingWidgetEnabled }));
+    updates[WIDGET_KEY] = partial.floatingWidgetEnabled;
   }
 
   if (partial.mode !== undefined) {
-    tasks.push(chrome.storage.local.set({ [MODE_KEY]: partial.mode }));
+    updates[MODE_KEY] = partial.mode;
   }
 
   if (partial.composePrompt !== undefined) {
-    tasks.push(chrome.storage.local.set({ [PROMPT_KEY]: partial.composePrompt }));
+    updates[PROMPT_KEY] = partial.composePrompt;
   }
 
-  await Promise.all(tasks);
+  if (Object.keys(updates).length > 0) {
+    await chrome.storage.local.set(updates);
+  }
 
   return getEchoSettings();
 }

@@ -249,7 +249,6 @@ export async function createPromptSession(options: PromptSessionOptions = {}): P
 
   switch (availabilityStatus) {
     case 'ready':
-      options.onStatusChange?.('ready');
       break;
     case 'downloadable':
       options.onStatusChange?.('downloadable');

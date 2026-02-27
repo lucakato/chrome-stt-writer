@@ -159,7 +159,8 @@ async function createRewriter(
   sharedContext: string | undefined,
   onDownloadProgress?: (progress: number) => void,
   onStatusChange?: (status: RewriterAvailabilityStatus) => void,
-  outputLanguage?: string
+  outputLanguage?: string,
+  reportDownloadable = false
 ) {
   const detection = detectRewriter();
   if (!detection) {
@@ -176,7 +177,9 @@ async function createRewriter(
 
   ensureUserActivation();
 
-  onStatusChange?.('downloadable');
+  if (reportDownloadable) {
+    onStatusChange?.('downloadable');
+  }
 
   creationPromise = detection.api.create({
     sharedContext,
@@ -229,7 +232,8 @@ export async function rewriteText(options: RewriteRequest): Promise<RewriteRespo
     options.sharedContext,
     options.onDownloadProgress,
     options.onStatusChange,
-    options.outputLanguage
+    options.outputLanguage,
+    availability.status === 'downloadable'
   );
   const provider = detectRewriter()?.provider ?? 'standard';
 

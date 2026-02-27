@@ -1,5 +1,5 @@
 import { DirectInsertPayload, EchoMessage, EchoResponse } from '@shared/messages';
-import { ComposeDraftFields, deriveParagraphs, joinParagraphs } from '@shared/compose';
+import { ComposeDraftFields, normalizeComposeDraftResult } from '@shared/compose';
 import { listSessions, upsertTranscript } from '@shared/storage';
 const DIRECT_INSERT_SCRIPT_ID = 'echo-direct-insert-script';
 const DIRECT_INSERT_STORAGE_KEY = 'echo:directInsertEnabled';
@@ -273,17 +273,24 @@ async function toggleDirectInsert(enabled: boolean) {
       });
   };
 
-  await broadcastToggle();
+  let broadcasted = false;
 
   if (chrome.webNavigation?.getAllFrames) {
     try {
       const frames = await chrome.webNavigation.getAllFrames({ tabId });
-      await Promise.all(
-        frames.map((frame) => broadcastToggle(frame.frameId))
-      );
+      if (frames.length > 0) {
+        await Promise.all(
+          frames.map((frame) => broadcastToggle(frame.frameId))
+        );
+        broadcasted = true;
+      }
     } catch (error) {
       console.warn('Unable to broadcast direct insert toggle to all frames', error);
     }
+  }
+
+  if (!broadcasted) {
+    await broadcastToggle();
   }
 }
 
@@ -315,7 +322,7 @@ async function handleTranscriptUpdate(
   }
 
   const session = await upsertTranscript(message.payload.transcript, {
-    actions: [message.payload.origin === 'panel' ? 'Captured' : 'Captured'],
+    actions: ['Captured'],
     sourceUrl: undefined
   });
 
@@ -392,20 +399,26 @@ async function handleRewriteUpdate(message: Extract<EchoMessage, { type: 'echo/a
   return session;
 }
 
-function sanitizeParagraphArray(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
+type ComposeDraftLike = ComposeDraftFields & { raw?: string };
+
+function normalizeComposeInput(input: ComposeDraftLike | string) {
+  if (typeof input === 'string') {
+    const normalized = normalizeComposeDraftResult({
+      content: input,
+      raw: input
+    });
+    return { ...normalized, raw: input };
   }
-  return value
-    .map((entry) =>
-      typeof entry === 'string'
-        ? entry
-            .replace(/\r\n?/g, '\n')
-            .replace(/[ \t]+$/gm, '')
-            .replace(/^\n+|\n+$/g, '')
-        : ''
-    )
-    .filter((entry) => entry.length > 0);
+
+  const raw = typeof input.raw === 'string' ? input.raw : undefined;
+  const normalized = normalizeComposeDraftResult({
+    content: typeof input.content === 'string' ? input.content : '',
+    subject: input.subject,
+    paragraphs: input.paragraphs,
+    raw: raw ?? ''
+  });
+
+  return { ...normalized, raw };
 }
 
 async function handleComposeUpdate(message: Extract<EchoMessage, { type: 'echo/ai/compose' }>) {
@@ -414,50 +427,21 @@ async function handleComposeUpdate(message: Extract<EchoMessage, { type: 'echo/a
     ? sessions.find((entry) => entry.id === message.payload.sessionId)
     : undefined;
 
-  const output = message.payload.output;
-  let content: string;
-  let subject: string | undefined;
-  let raw: string | undefined;
-  let paragraphs: string[] | undefined;
+  const output = message.payload.output as ComposeDraftLike | string;
+  const normalized = normalizeComposeInput(output);
 
-  if (typeof output === 'string') {
-    content = output.trim();
-    subject = undefined;
-    raw = output;
-    paragraphs = deriveParagraphs(content);
-  } else {
-    content = typeof output.content === 'string' ? output.content.trim() : '';
-    subject =
-      typeof output.subject === 'string' && output.subject.trim().length > 0
-        ? output.subject.trim()
-        : undefined;
-    raw = typeof output.raw === 'string' ? output.raw : undefined;
-    const providedParagraphs = sanitizeParagraphArray(output.paragraphs);
-    if (providedParagraphs.length > 0 && content) {
-      const joined = joinParagraphs(providedParagraphs);
-      paragraphs = joined.trim() === content.trim() ? providedParagraphs : deriveParagraphs(content);
-    } else if (providedParagraphs.length > 0) {
-      paragraphs = providedParagraphs;
-    } else {
-      paragraphs = deriveParagraphs(content);
-    }
-  }
-
-  const formattedParagraphs = paragraphs ?? deriveParagraphs(content);
-  const formattedContent = joinParagraphs(formattedParagraphs);
-  if (!formattedContent.trim()) {
+  if (!normalized.content.trim()) {
     throw new Error('Compose output is empty.');
   }
-  content = formattedContent;
 
   const compositionEntry = {
     id: crypto.randomUUID(),
     preset: message.payload.preset,
     instructions: message.payload.instructions,
-    content: formattedContent,
-    subject,
-    raw,
-    paragraphs: formattedParagraphs,
+    content: normalized.content,
+    subject: normalized.subject,
+    raw: normalized.raw,
+    paragraphs: normalized.paragraphs,
     createdAt: Date.now()
   } as const;
 
@@ -466,7 +450,7 @@ async function handleComposeUpdate(message: Extract<EchoMessage, { type: 'echo/a
     ? [compositionEntry, ...target.compositions]
     : [compositionEntry];
 
-  const session = await upsertTranscript(formattedContent, {
+  const session = await upsertTranscript(normalized.content, {
     id: sessionId,
     compositions,
     summary: target?.summary,
@@ -487,29 +471,25 @@ async function applyDirectInsertPayload(payload: DirectInsertPayload, tabIdOverr
     if (!rawContent) {
       throw new Error('Draft content is empty.');
     }
-    const subject =
-      typeof payload.draft.subject === 'string' && payload.draft.subject.trim().length > 0
-        ? payload.draft.subject.trim()
-        : undefined;
-    const providedParagraphs = sanitizeParagraphArray(payload.draft.paragraphs);
-    const resolvedParagraphs =
-      providedParagraphs.length > 0 && joinParagraphs(providedParagraphs).trim() === rawContent.trim()
-        ? providedParagraphs
-        : deriveParagraphs(rawContent);
-    const content = joinParagraphs(resolvedParagraphs);
-
-    normalizedDraft = { content, subject, paragraphs: resolvedParagraphs };
-    normalizedText = content;
+    const normalized = normalizeComposeInput(payload.draft);
+    normalizedDraft = {
+      content: normalized.content,
+      subject: normalized.subject,
+      paragraphs: normalized.paragraphs
+    };
+    normalizedText = normalized.content;
   } else {
     const rawContent = (payload.text ?? '').trim();
     if (!rawContent) {
       throw new Error('Draft content is empty.');
     }
-    const paragraphs = deriveParagraphs(rawContent);
-    const content = joinParagraphs(paragraphs);
-
-    normalizedDraft = { content, paragraphs };
-    normalizedText = content;
+    const normalized = normalizeComposeInput(rawContent);
+    normalizedDraft = {
+      content: normalized.content,
+      subject: normalized.subject,
+      paragraphs: normalized.paragraphs
+    };
+    normalizedText = normalized.content;
   }
 
   const messagePayload: DirectInsertPayload = {
@@ -522,7 +502,7 @@ async function applyDirectInsertPayload(payload: DirectInsertPayload, tabIdOverr
     throw new Error('No active tab for direct insert.');
   }
 
-  const restored = await restoreCaretForTab(tabId);
+  await restoreCaretForTab(tabId);
 
   const sendApplyMessage = () => {
     const message = {

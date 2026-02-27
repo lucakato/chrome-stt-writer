@@ -164,6 +164,7 @@ async function createSummarizer(options: {
   sharedContext?: string;
   expectedInputLanguages?: string[];
   expectedContextLanguages?: string[];
+  reportDownloadable?: boolean;
 }) {
   const detection = detectSummarizer();
   if (!detection) {
@@ -180,7 +181,9 @@ async function createSummarizer(options: {
 
   ensureUserActivation();
 
-  options.onStatusChange?.('downloadable');
+  if (options.reportDownloadable) {
+    options.onStatusChange?.('downloadable');
+  }
 
   creationPromise = detection.api.create({
     sharedContext: options.sharedContext,
@@ -237,7 +240,8 @@ export async function summarizeText(options: SummarizeRequest): Promise<Summariz
     outputLanguage: options.outputLanguage,
     sharedContext: options.sharedContext,
     expectedInputLanguages: options.expectedInputLanguages,
-    expectedContextLanguages: options.expectedContextLanguages
+    expectedContextLanguages: options.expectedContextLanguages,
+    reportDownloadable: availability.status === 'downloadable'
   });
   const provider = detectSummarizer()?.provider ?? 'standard';
 
